@@ -33,5 +33,8 @@ models/
 # Test projects
 test-project/
 
+# Playwright MCP screenshots
+.playwright-mcp/
+
 # Tauri build cache
 src-tauri/target/
