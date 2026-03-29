@@ -1,0 +1,190 @@
+/**
+ * MarkdownRenderer — ReactMarkdown wrapper with syntax highlighting and custom components.
+ * Uses rehype-highlight for code, remark-gfm for tables/strikethrough.
+ * Code blocks render via CodeBlock component with copy/apply toolbar.
+ */
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeHighlight from 'rehype-highlight';
+import rehypeKatex from 'rehype-katex';
+import CodeBlock from './CodeBlock';
+import MermaidBlock from './MermaidBlock';
+import 'katex/dist/katex.min.css';
+
+// Custom components for ReactMarkdown
+const markdownComponents = {
+  // Code blocks — delegate to CodeBlock for block code, inline stays styled
+  pre({ children }) {
+    return <>{children}</>;
+  },
+
+  code({ node, className, children, ...props }) {
+    const isInline = !className && !node?.position?.start?.line;
+    // Check if parent is a <pre> (block code) vs inline
+    // rehype-highlight adds className like "language-javascript hljs"
+    const hasLanguageClass = /language-/.test(className || '');
+
+    if (hasLanguageClass || (node?.tagName === 'code' && node?.properties?.className)) {
+      // Block code — render in CodeBlock (or MermaidBlock for mermaid)
+      // Extract language, filtering out 'hljs' which rehype-highlight adds as a utility class
+      const classTokens = (className || '').split(' ').filter(c => c && c !== 'hljs');
+      const langToken = classTokens.find(c => c.startsWith('language-'));
+      const lang = langToken ? langToken.replace(/^language-/, '') : (classTokens[0] || '');
+      if (lang === 'mermaid') {
+        const text = Array.isArray(children) ? children.join('') : String(children || '');
+        return <MermaidBlock>{text}</MermaidBlock>;
+      }
+      return (
+        <CodeBlock language={lang} className={className}>
+          {children}
+        </CodeBlock>
+      );
+    }
+
+    // Inline code
+    return (
+      <code className="bg-vsc-input px-1.5 py-0.5 rounded text-vsc-sm text-vsc-text-bright" {...props}>
+        {children}
+      </code>
+    );
+  },
+
+  // Tables — theme-aware
+  table({ children }) {
+    return (
+      <div className="overflow-x-auto my-2 rounded-md border border-vsc-panel-border/40">
+        <table className="w-full border-collapse text-vsc-sm">
+          {children}
+        </table>
+      </div>
+    );
+  },
+  thead({ children }) {
+    return <thead className="bg-vsc-sidebar">{children}</thead>;
+  },
+  th({ children }) {
+    return (
+      <th className="px-3 py-1.5 text-left font-semibold text-vsc-text-bright border-b border-vsc-panel-border/40">
+        {children}
+      </th>
+    );
+  },
+  td({ children }) {
+    return (
+      <td className="px-3 py-1.5 border-b border-vsc-panel-border/20 text-vsc-text">
+        {children}
+      </td>
+    );
+  },
+
+  // Blockquotes
+  blockquote({ children }) {
+    return (
+      <blockquote className="border-l-2 border-vsc-accent pl-3 ml-0 my-2 text-vsc-text-dim italic">
+        {children}
+      </blockquote>
+    );
+  },
+
+  // Horizontal rules
+  hr() {
+    return <hr className="border-vsc-panel-border/40 my-4" />;
+  },
+
+  // Links
+  a({ href, children }) {
+    return (
+      <a
+        href={href}
+        className="text-vsc-accent hover:text-vsc-accent-hover hover:underline"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        {children}
+      </a>
+    );
+  },
+
+  // Images
+  img({ src, alt }) {
+    return (
+      <img
+        src={src}
+        alt={alt || ''}
+        className="max-w-full rounded-md border border-vsc-panel-border/40 my-2"
+        loading="lazy"
+      />
+    );
+  },
+
+  // Paragraphs
+  p({ children }) {
+    return <p className="my-1.5 leading-relaxed">{children}</p>;
+  },
+
+  // Lists
+  ul({ children }) {
+    return <ul className="list-disc ml-5 my-1.5 space-y-0.5">{children}</ul>;
+  },
+  ol({ children }) {
+    return <ol className="list-decimal ml-5 my-1.5 space-y-0.5">{children}</ol>;
+  },
+
+  // Headings
+  h1({ children }) {
+    return <h1 className="text-vsc-xl font-semibold mt-3 mb-1 text-vsc-text-bright">{children}</h1>;
+  },
+  h2({ children }) {
+    return <h2 className="text-vsc-lg font-semibold mt-3 mb-1 text-vsc-text-bright">{children}</h2>;
+  },
+  h3({ children }) {
+    return <h3 className="text-vsc-base font-semibold mt-2 mb-1 text-vsc-text-bright">{children}</h3>;
+  },
+};
+
+const remarkPlugins = [remarkGfm, remarkMath];
+const rehypePlugins = [
+  [rehypeHighlight, { detect: true, ignoreMissing: true }],
+  rehypeKatex,
+];
+
+export default function MarkdownRenderer({ content, streaming }) {
+  if (!content) return null;
+
+  // During streaming, auto-close unclosed code fences so partial code blocks render properly.
+  // Tracks actual fence boundaries: a fence opens/closes with 3+ backticks at line start,
+  // and the closing fence must have at least as many backticks as the opening.
+  let displayContent = content;
+  if (streaming) {
+    const lines = content.split('\n');
+    let openFenceLen = 0; // length of the opening fence backticks (0 = not inside a fence)
+    for (const line of lines) {
+      const fenceMatch = line.match(/^(`{3,})/);
+      if (fenceMatch) {
+        const len = fenceMatch[1].length;
+        if (openFenceLen === 0) {
+          openFenceLen = len; // opening fence
+        } else if (len >= openFenceLen) {
+          openFenceLen = 0; // closing fence
+        }
+        // else: inner backticks with fewer ticks than opener — ignored
+      }
+    }
+    if (openFenceLen > 0) {
+      displayContent = content + '\n' + '`'.repeat(openFenceLen);
+    }
+  }
+
+  return (
+    <div className="markdown-body">
+      <ReactMarkdown
+        remarkPlugins={remarkPlugins}
+        rehypePlugins={rehypePlugins}
+        components={markdownComponents}
+      >
+        {displayContent}
+      </ReactMarkdown>
+    </div>
+  );
+}

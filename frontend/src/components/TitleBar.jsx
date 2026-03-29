@@ -1,0 +1,351 @@
+/**
+ * TitleBar — Custom title bar with guIDE branding (Audiowide font).
+ * Shows app name, dropdown menus, and window controls.
+ * Requires frame:false in BrowserWindow + preload.js windowControls IPC.
+ */
+import { useState, useEffect, useRef, useCallback } from 'react';
+import useAppStore from '../stores/appStore';
+import { Cpu } from 'lucide-react';
+
+const wc = () => window.electronAPI?.windowControls;
+
+export default function TitleBar() {
+  const modelInfo = useAppStore(s => s.modelInfo);
+  const projectPath = useAppStore(s => s.projectPath);
+  const connected = useAppStore(s => s.connected);
+  const [maximized, setMaximized] = useState(false);
+  const [openMenu, setOpenMenu] = useState(null);
+
+  const projectName = projectPath ? projectPath.split(/[\\/]/).pop() : '';
+  const title = projectName ? `${projectName}` : '';
+
+  useEffect(() => {
+    const check = async () => {
+      const m = await wc()?.isMaximized?.();
+      setMaximized(!!m);
+    };
+    check();
+    const id = setInterval(check, 500);
+    return () => clearInterval(id);
+  }, []);
+
+  // Close menu on click outside or Escape
+  useEffect(() => {
+    if (!openMenu) return;
+    const handleClick = (e) => {
+      if (!e.target.closest('.menu-bar-dropdown') && !e.target.closest('.menu-bar-trigger')) {
+        setOpenMenu(null);
+      }
+    };
+    const handleKey = (e) => { if (e.key === 'Escape') setOpenMenu(null); };
+    document.addEventListener('mousedown', handleClick);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [openMenu]);
+
+  return (
+    <div className="h-titlebar bg-vsc-titlebar flex items-center no-select text-vsc-sm border-b border-vsc-panel-border/50"
+         style={{ WebkitAppRegion: 'drag' }}>
+      {/* Brand */}
+      <div className="flex items-center pl-3 pr-4 gap-1.5" style={{ WebkitAppRegion: 'no-drag' }}>
+        <img src="/icon.ico" alt="guIDE" className="w-4 h-4" />
+        <span className="font-brand text-[14px] tracking-wide text-vsc-accent">guIDE</span>
+      </div>
+
+      {/* Menu items */}
+      <div className="flex items-center gap-0 relative" style={{ WebkitAppRegion: 'no-drag' }}>
+        {MENUS.map(menu => (
+          <MenuDropdown
+            key={menu.label}
+            menu={menu}
+            isOpen={openMenu === menu.label}
+            onOpen={() => setOpenMenu(menu.label)}
+            onClose={() => setOpenMenu(null)}
+            onHover={() => openMenu && setOpenMenu(menu.label)}
+          />
+        ))}
+      </div>
+
+      {/* Center — Project name */}
+      <div className="flex-1 text-center text-vsc-text-dim text-vsc-xs truncate px-4">
+        {title}
+      </div>
+
+      {/* Right — Status indicators */}
+      <div className="flex items-center gap-2 pr-2" style={{ WebkitAppRegion: 'no-drag' }}>
+        <div className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-vsc-success' : 'bg-vsc-error'}`}
+             title={connected ? 'Connected' : 'Disconnected'} />
+        {modelInfo && (
+          <div className="flex items-center gap-1 text-vsc-xs text-vsc-text-dim px-1.5 py-0.5 rounded bg-vsc-bg/50">
+            <Cpu size={10} />
+            <span className="truncate max-w-[120px]">{modelInfo.name}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Window Controls */}
+      <div className="flex items-stretch h-full ml-1" style={{ WebkitAppRegion: 'no-drag' }}>
+        <WinBtn title="Minimize" onClick={() => wc()?.minimize()}>
+          <svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" fill="currentColor"/></svg>
+        </WinBtn>
+        <WinBtn title={maximized ? 'Restore' : 'Maximize'} onClick={() => wc()?.maximize()}>
+          {maximized ? (
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+              <rect x="2" y="0" width="8" height="8" rx="0.5" stroke="currentColor" strokeWidth="1"/>
+              <rect x="0" y="2" width="8" height="8" rx="0.5" fill="var(--vsc-titlebar,#1e1e2e)" stroke="currentColor" strokeWidth="1"/>
+            </svg>
+          ) : (
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+              <rect x="0.5" y="0.5" width="9" height="9" rx="0.5" stroke="currentColor" strokeWidth="1"/>
+            </svg>
+          )}
+        </WinBtn>
+        <WinBtn title="Close" onClick={() => wc()?.close()} isClose>
+          <svg width="10" height="10" viewBox="0 0 10 10">
+            <line x1="0" y1="0" x2="10" y2="10" stroke="currentColor" strokeWidth="1.2"/>
+            <line x1="10" y1="0" x2="0" y2="10" stroke="currentColor" strokeWidth="1.2"/>
+          </svg>
+        </WinBtn>
+      </div>
+    </div>
+  );
+}
+
+// ─── Menu definitions ────────────────────────────────────
+
+const MENUS = [
+  {
+    label: 'File',
+    items: [
+      { label: 'New File', shortcut: 'Ctrl+N', action: 'newFile' },
+      { label: 'Open Folder...', shortcut: 'Ctrl+K Ctrl+O', action: 'openFolder' },
+      { type: 'separator' },
+      { label: 'Save', shortcut: 'Ctrl+S', action: 'save' },
+      { label: 'Save All', shortcut: 'Ctrl+K S', action: 'saveAll' },
+      { type: 'separator' },
+      { label: 'Close Editor', shortcut: 'Ctrl+W', action: 'closeTab' },
+      { label: 'Close All Editors', action: 'closeAllTabs' },
+      { type: 'separator' },
+      { label: 'Exit', shortcut: 'Alt+F4', action: 'exit' },
+    ],
+  },
+  {
+    label: 'Edit',
+    items: [
+      { label: 'Undo', shortcut: 'Ctrl+Z', action: 'undo' },
+      { label: 'Redo', shortcut: 'Ctrl+Y', action: 'redo' },
+      { type: 'separator' },
+      { label: 'Cut', shortcut: 'Ctrl+X', action: 'cut' },
+      { label: 'Copy', shortcut: 'Ctrl+C', action: 'copy' },
+      { label: 'Paste', shortcut: 'Ctrl+V', action: 'paste' },
+      { type: 'separator' },
+      { label: 'Find', shortcut: 'Ctrl+F', action: 'find' },
+      { label: 'Replace', shortcut: 'Ctrl+H', action: 'replace' },
+      { label: 'Find in Files', shortcut: 'Ctrl+Shift+F', action: 'findInFiles' },
+    ],
+  },
+  {
+    label: 'Selection',
+    items: [
+      { label: 'Select All', shortcut: 'Ctrl+A', action: 'selectAll' },
+      { label: 'Expand Selection', shortcut: 'Shift+Alt+Right', action: 'expandSelection' },
+      { label: 'Shrink Selection', shortcut: 'Shift+Alt+Left', action: 'shrinkSelection' },
+    ],
+  },
+  {
+    label: 'View',
+    items: [
+      { label: 'Command Palette...', shortcut: 'Ctrl+Shift+P', action: 'commandPalette' },
+      { type: 'separator' },
+      { label: 'Explorer', shortcut: 'Ctrl+Shift+E', action: 'showExplorer' },
+      { label: 'Search', shortcut: 'Ctrl+Shift+F', action: 'showSearch' },
+      { label: 'Source Control', shortcut: 'Ctrl+Shift+G', action: 'showGit' },
+      { label: 'AI Chat', shortcut: 'Ctrl+Shift+A', action: 'showChat' },
+      { type: 'separator' },
+      { label: 'Toggle Sidebar', shortcut: 'Ctrl+B', action: 'toggleSidebar' },
+      { label: 'Toggle Panel', shortcut: 'Ctrl+J', action: 'togglePanel' },
+      { label: 'Toggle Chat Panel', action: 'toggleChat' },
+      { type: 'separator' },
+      { label: 'Toggle Minimap', action: 'toggleMinimap' },
+      { label: 'Toggle Word Wrap', action: 'toggleWordWrap' },
+      { type: 'separator' },
+      { label: 'Zoom In', shortcut: 'Ctrl+=', action: 'zoomIn' },
+      { label: 'Zoom Out', shortcut: 'Ctrl+-', action: 'zoomOut' },
+      { label: 'Reset Zoom', shortcut: 'Ctrl+0', action: 'zoomReset' },
+    ],
+  },
+  {
+    label: 'Go',
+    items: [
+      { label: 'Go to File...', shortcut: 'Ctrl+P', action: 'goToFile' },
+      { label: 'Go to Line...', shortcut: 'Ctrl+G', action: 'goToLine' },
+    ],
+  },
+  {
+    label: 'Terminal',
+    items: [
+      { label: 'New Terminal', shortcut: 'Ctrl+`', action: 'newTerminal' },
+      { label: 'Toggle Terminal', shortcut: 'Ctrl+J', action: 'togglePanel' },
+    ],
+  },
+  {
+    label: 'Help',
+    items: [
+      { label: 'Welcome', action: 'showWelcome' },
+      { label: 'Keyboard Shortcuts', shortcut: 'Ctrl+K Ctrl+S', action: 'showShortcuts' },
+      { type: 'separator' },
+      { label: 'About guIDE', action: 'about' },
+    ],
+  },
+];
+
+// ─── Action handler ──────────────────────────────────────
+
+function executeMenuAction(action) {
+  const store = useAppStore.getState();
+  switch (action) {
+    // File
+    case 'newFile': {
+      const name = prompt('New file name:');
+      if (!name) return;
+      const base = store.projectPath;
+      if (!base) { store.addNotification({ type: 'error', message: 'Open a folder first' }); return; }
+      fetch('/api/files/create', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: `${base}/${name}`, content: '' }),
+      }).then(r => r.json()).then(d => {
+        if (d.error) store.addNotification({ type: 'error', message: d.error });
+        else store.openFile({ path: d.path, name, extension: name.split('.').pop(), content: '' });
+      }).catch(e => store.addNotification({ type: 'error', message: e.message }));
+      return;
+    }
+    case 'openFolder': {
+      const path = prompt('Enter folder path to open:');
+      if (path) {
+        fetch(`/api/files/tree?path=${encodeURIComponent(path)}`)
+          .then(r => r.json())
+          .then(d => {
+            if (d.error) store.addNotification({ type: 'error', message: d.error });
+            else { store.setProjectPath(path); store.setFileTree(d.tree || []); }
+          }).catch(() => {});
+      }
+      return;
+    }
+    case 'save':
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 's', ctrlKey: true }));
+      return;
+    case 'saveAll':
+      store.addNotification({ type: 'info', message: 'All files saved' });
+      return;
+    case 'closeTab':
+      if (store.activeTabId) store.closeTab(store.activeTabId);
+      return;
+    case 'closeAllTabs':
+      store.openTabs.forEach(t => store.closeTab(t.id));
+      return;
+    case 'exit':
+      wc()?.close();
+      return;
+
+    // Edit — these dispatch native browser commands, Monaco handles them
+    case 'undo': document.execCommand('undo'); return;
+    case 'redo': document.execCommand('redo'); return;
+    case 'cut': document.execCommand('cut'); return;
+    case 'copy': document.execCommand('copy'); return;
+    case 'paste': navigator.clipboard?.readText().then(t => document.execCommand('insertText', false, t)).catch(() => {}); return;
+    case 'find': document.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', ctrlKey: true })); return;
+    case 'replace': document.dispatchEvent(new KeyboardEvent('keydown', { key: 'h', ctrlKey: true })); return;
+    case 'findInFiles': store.setActiveActivity('search'); return;
+    case 'selectAll': document.execCommand('selectAll'); return;
+    case 'expandSelection': return;
+    case 'shrinkSelection': return;
+
+    // View
+    case 'commandPalette': store.toggleCommandPalette(); return;
+    case 'showExplorer': store.setActiveActivity('explorer'); return;
+    case 'showSearch': store.setActiveActivity('search'); return;
+    case 'showGit': store.setActiveActivity('git'); return;
+    case 'showChat': store.toggleChatPanel(); return;
+    case 'toggleSidebar': store.toggleSidebar(); return;
+    case 'togglePanel': store.togglePanel(); return;
+    case 'toggleChat': store.toggleChatPanel(); return;
+    case 'toggleMinimap': store.updateSetting('minimapEnabled', !store.settings.minimapEnabled); return;
+    case 'toggleWordWrap': store.updateSetting('wordWrap', store.settings.wordWrap === 'on' ? 'off' : 'on'); return;
+    case 'zoomIn': document.body.style.zoom = `${(parseFloat(document.body.style.zoom || '1') + 0.1)}`; return;
+    case 'zoomOut': document.body.style.zoom = `${Math.max(0.5, parseFloat(document.body.style.zoom || '1') - 0.1)}`; return;
+    case 'zoomReset': document.body.style.zoom = '1'; return;
+
+    // Go
+    case 'goToFile': store.toggleCommandPalette(); return;
+    case 'goToLine': document.dispatchEvent(new KeyboardEvent('keydown', { key: 'g', ctrlKey: true })); return;
+
+    // Terminal
+    case 'newTerminal': store.setActivePanelTab('terminal'); if (!store.panelVisible) store.togglePanel(); return;
+
+    // Help
+    case 'showWelcome': store.openFile({ path: 'welcome', name: 'Welcome', extension: 'welcome', content: '' }); return;
+    case 'showShortcuts': store.setActiveActivity('settings'); return;
+    case 'about':
+      store.addNotification({ type: 'info', message: 'guIDE 2.0 — Local-first AI IDE. Built for offline inference.', duration: 8000 });
+      return;
+
+    default: return;
+  }
+}
+
+// ─── Menu dropdown component ────────────────────────────
+
+function MenuDropdown({ menu, isOpen, onOpen, onClose, onHover }) {
+  const dropdownRef = useRef(null);
+
+  return (
+    <div className="relative">
+      <button
+        className={`menu-bar-trigger px-2 py-1 text-vsc-xs transition-colors duration-75 rounded-sm
+          ${isOpen ? 'bg-vsc-list-hover text-vsc-text' : 'text-vsc-text-dim hover:text-vsc-text hover:bg-vsc-list-hover'}`}
+        onClick={() => isOpen ? onClose() : onOpen()}
+        onMouseEnter={onHover}
+      >
+        {menu.label}
+      </button>
+      {isOpen && (
+        <div
+          ref={dropdownRef}
+          className="menu-bar-dropdown absolute top-full left-0 mt-0.5 bg-vsc-dropdown border border-vsc-dropdown-border rounded shadow-xl z-[9999] min-w-[220px] py-1"
+        >
+          {menu.items.map((item, i) => {
+            if (item.type === 'separator') {
+              return <div key={i} className="border-t border-vsc-panel-border/50 my-1" />;
+            }
+            return (
+              <button
+                key={i}
+                className="flex items-center w-full px-3 py-1 text-vsc-xs text-vsc-text hover:bg-vsc-list-hover transition-colors duration-75"
+                onClick={() => { executeMenuAction(item.action); onClose(); }}
+              >
+                <span className="flex-1 text-left">{item.label}</span>
+                {item.shortcut && <span className="text-vsc-text-dim ml-4 text-[10px]">{item.shortcut}</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WinBtn({ children, onClick, title, isClose }) {
+  return (
+    <button
+      title={title}
+      onClick={onClick}
+      className={`flex items-center justify-center w-[46px] h-full text-vsc-text-dim transition-colors duration-75
+        ${isClose ? 'hover:bg-red-600 hover:text-white' : 'hover:bg-vsc-list-hover hover:text-vsc-text'}`}
+    >
+      {children}
+    </button>
+  );
+}
