@@ -1,11 +1,11 @@
 /**
  * TitleBar — Custom title bar with guIDE branding (Audiowide font).
- * Shows app name, dropdown menus, and window controls.
+ * Shows hamburger menu, centered search bar, and window controls.
  * Requires frame:false in BrowserWindow + preload.js windowControls IPC.
  */
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import useAppStore from '../stores/appStore';
-import { Cpu } from 'lucide-react';
+import { Cpu, Search, Menu, ChevronRight, X } from 'lucide-react';
 
 const wc = () => window.electronAPI?.windowControls;
 
@@ -13,8 +13,14 @@ export default function TitleBar() {
   const modelInfo = useAppStore(s => s.modelInfo);
   const projectPath = useAppStore(s => s.projectPath);
   const connected = useAppStore(s => s.connected);
+  const fileTree = useAppStore(s => s.fileTree);
+  const openFile = useAppStore(s => s.openFile);
   const [maximized, setMaximized] = useState(false);
-  const [openMenu, setOpenMenu] = useState(null);
+  const [openMenu, setOpenMenu] = useState(null);    // hamburger panel
+  const [expandedCat, setExpandedCat] = useState(null); // expanded category in hamburger
+  const [searchActive, setSearchActive] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const searchInputRef = useRef(null);
 
   const projectName = projectPath ? projectPath.split(/[\\/]/).pop() : '';
   const title = projectName ? `${projectName}` : '';
@@ -29,49 +35,203 @@ export default function TitleBar() {
     return () => clearInterval(id);
   }, []);
 
-  // Close menu on click outside or Escape
+  // Close hamburger / search on Escape or click outside
   useEffect(() => {
-    if (!openMenu) return;
+    if (!openMenu && !searchActive) return;
     const handleClick = (e) => {
-      if (!e.target.closest('.menu-bar-dropdown') && !e.target.closest('.menu-bar-trigger')) {
+      if (openMenu && !e.target.closest('.hamburger-panel') && !e.target.closest('.hamburger-trigger')) {
         setOpenMenu(null);
+        setExpandedCat(null);
+      }
+      if (searchActive && !e.target.closest('.search-bar-container')) {
+        setSearchActive(false);
+        setSearchQuery('');
       }
     };
-    const handleKey = (e) => { if (e.key === 'Escape') setOpenMenu(null); };
+    const handleKey = (e) => {
+      if (e.key === 'Escape') {
+        setOpenMenu(null);
+        setExpandedCat(null);
+        setSearchActive(false);
+        setSearchQuery('');
+      }
+    };
     document.addEventListener('mousedown', handleClick);
     document.addEventListener('keydown', handleKey);
     return () => {
       document.removeEventListener('mousedown', handleClick);
       document.removeEventListener('keydown', handleKey);
     };
-  }, [openMenu]);
+  }, [openMenu, searchActive]);
+
+  // Ctrl+P to activate search bar
+  useEffect(() => {
+    const handleGlobalKey = (e) => {
+      if (e.ctrlKey && e.key === 'p') {
+        e.preventDefault();
+        setSearchActive(true);
+        setTimeout(() => searchInputRef.current?.focus(), 50);
+      }
+    };
+    document.addEventListener('keydown', handleGlobalKey);
+    return () => document.removeEventListener('keydown', handleGlobalKey);
+  }, []);
+
+  // Focus search input when activated
+  useEffect(() => {
+    if (searchActive) searchInputRef.current?.focus();
+  }, [searchActive]);
+
+  // Flatten file tree for search
+  const flatFiles = useMemo(() => {
+    const result = [];
+    const walk = (items, parentPath = '') => {
+      for (const item of items || []) {
+        const fullPath = parentPath ? `${parentPath}/${item.name}` : item.name;
+        if (item.type === 'file') {
+          result.push({ name: item.name, path: fullPath, fullPath: item.path || fullPath });
+        }
+        if (item.children) walk(item.children, fullPath);
+      }
+    };
+    walk(fileTree);
+    return result;
+  }, [fileTree]);
+
+  const searchResults = useMemo(() => {
+    if (!searchQuery.trim()) return [];
+    const q = searchQuery.toLowerCase();
+    return flatFiles
+      .filter(f => f.name.toLowerCase().includes(q) || f.path.toLowerCase().includes(q))
+      .slice(0, 12);
+  }, [searchQuery, flatFiles]);
+
+  const handleSearchSelect = (file) => {
+    openFile({
+      path: file.fullPath,
+      name: file.name,
+      extension: file.name.split('.').pop() || '',
+      content: '',
+    });
+    setSearchActive(false);
+    setSearchQuery('');
+  };
 
   return (
     <div className="h-titlebar bg-vsc-titlebar flex items-center no-select text-vsc-sm border-b border-vsc-panel-border/50"
          style={{ WebkitAppRegion: 'drag' }}>
-      {/* Brand */}
-      <div className="flex items-center pl-3 pr-4 gap-1.5" style={{ WebkitAppRegion: 'no-drag' }}>
+      {/* Brand + Hamburger */}
+      <div className="flex items-center pl-2 pr-2 gap-1" style={{ WebkitAppRegion: 'no-drag' }}>
+        {/* Hamburger button */}
+        <button
+          className={`hamburger-trigger p-1.5 rounded transition-colors duration-150
+            ${openMenu ? 'bg-vsc-list-hover text-vsc-text' : 'text-vsc-text-dim hover:text-vsc-text hover:bg-vsc-list-hover/60'}`}
+          onClick={() => { setOpenMenu(openMenu ? null : 'main'); setExpandedCat(null); }}
+        >
+          {openMenu ? <X size={14} /> : <Menu size={14} />}
+        </button>
+
         <img src="/icon.ico" alt="guIDE" className="w-4 h-4" />
         <span className="font-brand text-[14px] tracking-wide text-vsc-accent">guIDE</span>
       </div>
 
-      {/* Menu items */}
-      <div className="flex items-center gap-0 relative" style={{ WebkitAppRegion: 'no-drag' }}>
-        {MENUS.map(menu => (
-          <MenuDropdown
-            key={menu.label}
-            menu={menu}
-            isOpen={openMenu === menu.label}
-            onOpen={() => setOpenMenu(menu.label)}
-            onClose={() => setOpenMenu(null)}
-            onHover={() => openMenu && setOpenMenu(menu.label)}
-          />
-        ))}
-      </div>
+      {/* Hamburger Panel */}
+      {openMenu && (
+        <div className="hamburger-panel absolute top-titlebar left-2 bg-vsc-dropdown/95 backdrop-blur-xl border border-vsc-dropdown-border rounded-lg shadow-2xl z-[9999] w-[280px] py-1.5 max-h-[80vh] overflow-y-auto">
+          {MENUS.map(menu => (
+            <div key={menu.label}>
+              <button
+                className="flex items-center w-full px-3 py-1.5 text-[12px] font-medium text-vsc-text hover:bg-vsc-list-hover transition-colors duration-100"
+                onClick={() => setExpandedCat(expandedCat === menu.label ? null : menu.label)}
+              >
+                <ChevronRight size={12} className={`mr-1.5 text-vsc-text-dim transition-transform duration-150 ${expandedCat === menu.label ? 'rotate-90' : ''}`} />
+                <span>{menu.label}</span>
+              </button>
+              {expandedCat === menu.label && (
+                <div className="pl-3 pb-1">
+                  {menu.items.map((item, i) => {
+                    if (item.type === 'separator') {
+                      return <div key={i} className="border-t border-vsc-panel-border/30 my-1 mx-2" />;
+                    }
+                    return (
+                      <button
+                        key={i}
+                        className="flex items-center w-full px-3 py-1 text-vsc-xs text-vsc-text-dim hover:text-vsc-text hover:bg-vsc-list-hover/60 transition-colors duration-100 rounded"
+                        onClick={() => { executeMenuAction(item.action); setOpenMenu(null); setExpandedCat(null); }}
+                      >
+                        <span className="flex-1 text-left">{item.label}</span>
+                        {item.shortcut && <span className="text-vsc-text-dim/60 ml-3 text-[10px]">{item.shortcut}</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
 
-      {/* Center — Project name */}
-      <div className="flex-1 text-center text-vsc-text-dim text-vsc-xs truncate px-4">
-        {title}
+      {/* Center — Search Bar */}
+      <div className="flex-1 flex justify-center px-4" style={{ WebkitAppRegion: 'no-drag' }}>
+        <div className="search-bar-container relative w-full max-w-[480px]">
+          {searchActive ? (
+            <>
+              <div className="flex items-center bg-vsc-input border border-vsc-input-border rounded-md px-2.5 py-0.5 gap-1.5 shadow-lg">
+                <Search size={12} className="text-vsc-text-dim flex-shrink-0" />
+                <input
+                  ref={searchInputRef}
+                  className="flex-1 bg-transparent border-none outline-none text-vsc-xs text-vsc-text placeholder:text-vsc-text-dim/50"
+                  placeholder="Search files by name (Ctrl+P)"
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && searchResults.length > 0) {
+                      handleSearchSelect(searchResults[0]);
+                    }
+                    if (e.key === 'Escape') {
+                      setSearchActive(false);
+                      setSearchQuery('');
+                    }
+                  }}
+                />
+                <button
+                  className="p-0.5 text-vsc-text-dim hover:text-vsc-text"
+                  onClick={() => { setSearchActive(false); setSearchQuery(''); }}
+                >
+                  <X size={11} />
+                </button>
+              </div>
+              {/* Search Results Dropdown */}
+              {searchQuery && searchResults.length > 0 && (
+                <div className="absolute top-full left-0 right-0 mt-1 bg-vsc-dropdown/95 backdrop-blur-xl border border-vsc-dropdown-border rounded-lg shadow-2xl z-[9999] max-h-[300px] overflow-y-auto py-1">
+                  {searchResults.map((file, i) => (
+                    <button
+                      key={file.fullPath}
+                      className={`flex items-center w-full px-3 py-1.5 text-vsc-xs hover:bg-vsc-list-hover transition-colors ${i === 0 ? 'bg-vsc-list-hover/40' : ''}`}
+                      onClick={() => handleSearchSelect(file)}
+                    >
+                      <span className="text-vsc-text font-medium truncate">{file.name}</span>
+                      <span className="ml-2 text-[10px] text-vsc-text-dim/60 truncate">{file.path}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {searchQuery && searchResults.length === 0 && (
+                <div className="absolute top-full left-0 right-0 mt-1 bg-vsc-dropdown/95 backdrop-blur-xl border border-vsc-dropdown-border rounded-lg shadow-2xl z-[9999] py-3 px-4">
+                  <span className="text-vsc-xs text-vsc-text-dim">No matching files</span>
+                </div>
+              )}
+            </>
+          ) : (
+            <button
+              className="flex items-center justify-center gap-1.5 w-full px-3 py-0.5 rounded-md text-vsc-xs text-vsc-text-dim/70 hover:text-vsc-text-dim hover:bg-vsc-list-hover/40 transition-colors duration-150 border border-transparent hover:border-vsc-panel-border/30"
+              onClick={() => setSearchActive(true)}
+            >
+              <Search size={11} />
+              <span className="truncate">{title || 'Search files (Ctrl+P)'}</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Right — Status indicators */}
@@ -296,46 +456,7 @@ function executeMenuAction(action) {
   }
 }
 
-// ─── Menu dropdown component ────────────────────────────
-
-function MenuDropdown({ menu, isOpen, onOpen, onClose, onHover }) {
-  const dropdownRef = useRef(null);
-
-  return (
-    <div className="relative">
-      <button
-        className={`menu-bar-trigger px-2 py-1 text-vsc-xs transition-colors duration-75 rounded-sm
-          ${isOpen ? 'bg-vsc-list-hover text-vsc-text' : 'text-vsc-text-dim hover:text-vsc-text hover:bg-vsc-list-hover'}`}
-        onClick={() => isOpen ? onClose() : onOpen()}
-        onMouseEnter={onHover}
-      >
-        {menu.label}
-      </button>
-      {isOpen && (
-        <div
-          ref={dropdownRef}
-          className="menu-bar-dropdown absolute top-full left-0 mt-0.5 bg-vsc-dropdown border border-vsc-dropdown-border rounded shadow-xl z-[9999] min-w-[220px] py-1"
-        >
-          {menu.items.map((item, i) => {
-            if (item.type === 'separator') {
-              return <div key={i} className="border-t border-vsc-panel-border/50 my-1" />;
-            }
-            return (
-              <button
-                key={i}
-                className="flex items-center w-full px-3 py-1 text-vsc-xs text-vsc-text hover:bg-vsc-list-hover transition-colors duration-75"
-                onClick={() => { executeMenuAction(item.action); onClose(); }}
-              >
-                <span className="flex-1 text-left">{item.label}</span>
-                {item.shortcut && <span className="text-vsc-text-dim ml-4 text-[10px]">{item.shortcut}</span>}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
+// ─── Win button component ────────────────────────────
 
 function WinBtn({ children, onClick, title, isClose }) {
   return (

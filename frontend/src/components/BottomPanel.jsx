@@ -275,6 +275,30 @@ function XTermPanel() {
     };
   }, [loaded]);
 
+  // R39-A3: Sync xterm theme when app theme changes (class attribute on <html>)
+  useEffect(() => {
+    if (!xtermRef.current) return;
+    const observer = new MutationObserver(() => {
+      if (!xtermRef.current) return;
+      const style = getComputedStyle(document.documentElement);
+      const getColor = (name) => {
+        const val = style.getPropertyValue(`--guide-${name}`).trim();
+        if (!val) return undefined;
+        const parts = val.split(' ').map(Number);
+        if (parts.length === 3) return `rgb(${parts[0]}, ${parts[1]}, ${parts[2]})`;
+        return undefined;
+      };
+      xtermRef.current.options.theme = {
+        background: getColor('terminal-bg') || '#0a0a0a',
+        foreground: getColor('terminal-fg') || '#b4b4b4',
+        cursor: getColor('terminal-cursor') || '#ff6b00',
+        selectionBackground: getColor('selection') || 'rgba(60, 40, 10, 0.5)',
+      };
+    });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    return () => observer.disconnect();
+  }, [loaded]);
+
   return (
     <div className="h-full w-full relative">
       <div

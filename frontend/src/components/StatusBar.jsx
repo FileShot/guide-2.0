@@ -55,7 +55,16 @@ export default function StatusBar() {
     const interval = setInterval(() => {
       const now = Date.now();
       const elapsed = (now - lastTickRef.current) / 1000;
-      const currentLen = useAppStore.getState().chatStreamingText.length;
+      const state = useAppStore.getState();
+      // R37-Step5: Measure BOTH chatStreamingText AND streamingFileBlocks content.
+      // File content goes through a separate channel (file-content-token → streamingFileBlocks)
+      // not chatStreamingText, so the old measurement missed all file-writing tokens.
+      let currentLen = state.chatStreamingText.length;
+      if (state.streamingFileBlocks && state.streamingFileBlocks.length > 0) {
+        for (const block of state.streamingFileBlocks) {
+          currentLen += (block.content || '').length;
+        }
+      }
       const charsDelta = currentLen - prevTextLenRef.current;
       // Approximate: ~4 chars per token
       const tokensDelta = Math.max(0, Math.round(charsDelta / 4));

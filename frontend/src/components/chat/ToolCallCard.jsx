@@ -20,7 +20,8 @@ export default function ToolCallCard({ toolCall }) {
   const StatusIcon = config.icon;
 
   return (
-    <div className="tool-call-card my-2 rounded-lg border border-vsc-panel-border/40 bg-vsc-sidebar/50 overflow-hidden">
+    <div className="tool-call-card my-2 rounded-lg border border-vsc-panel-border/40 bg-vsc-sidebar/50 overflow-hidden shadow-sm"
+      style={{ boxShadow: '0 2px 8px rgba(0,0,0,0.15), 0 1px 0 rgba(255,255,255,0.02) inset' }}>
       {/* Header */}
       <div className="flex items-center gap-2 px-3 py-2">
         <Wrench size={13} className="text-vsc-text-dim flex-shrink-0" />

@@ -71,10 +71,22 @@ export default function App() {
 
       // Tool events
       case 'tool-executing':
+        s.addStreamingToolCall({
+          functionName: data.functionName || data.name,
+          params: data.params || data.arguments,
+          status: 'pending',
+          startTime: Date.now(),
+        });
         break;
       case 'mcp-tool-results':
+        s.updateStreamingToolCall(data.functionName || data.name, {
+          status: data.success !== false ? 'success' : 'error',
+          result: data.result,
+          duration: Date.now() - (s.streamingToolCalls.find(tc => tc.functionName === (data.functionName || data.name))?.startTime || Date.now()),
+        });
         break;
       case 'tool-checkpoint':
+        s.updateStreamingToolCall(data.functionName || data.name, { checkpoint: data });
         break;
 
       // File events
@@ -190,6 +202,121 @@ export default function App() {
       }
     );
   }, [handleEvent]);
+
+  // Listen for native Electron menu actions (sent via IPC from appMenu.js)
+  useEffect(() => {
+    if (!window.electronAPI?.onMenuAction) return;
+    window.electronAPI.onMenuAction((action) => {
+      const s = useAppStore.getState();
+      switch (action) {
+        case 'newFile': {
+          const name = prompt('New file name:');
+          if (!name) return;
+          const base = s.projectPath;
+          if (!base) { s.addNotification({ type: 'error', message: 'Open a folder first' }); return; }
+          fetch('/api/files/create', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: `${base}/${name}`, content: '' }),
+          }).then(r => r.json()).then(d => {
+            if (d.error) s.addNotification({ type: 'error', message: d.error });
+            else s.openFile({ path: d.path, name, extension: name.split('.').pop(), content: '' });
+          }).catch(e => s.addNotification({ type: 'error', message: e.message }));
+          return;
+        }
+        case 'openFolder': {
+          if (window.electronAPI?.openFolderDialog) {
+            window.electronAPI.openFolderDialog().then(folderPath => {
+              if (folderPath) {
+                fetch('/api/project/open', {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ projectPath: folderPath }),
+                }).then(r => r.json()).then(d => {
+                  if (!d.error) s.setProjectPath(folderPath);
+                }).catch(() => {});
+              }
+            });
+          }
+          return;
+        }
+        case 'save': {
+          const tab = s.openTabs.find(t => t.id === s.activeTabId);
+          if (tab && tab.modified) {
+            fetch('/api/files/write', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ filePath: tab.path, content: tab.content }),
+            }).then(r => r.json()).then(res => {
+              if (res.success) s.markTabSaved(tab.id);
+            }).catch(() => {});
+          }
+          return;
+        }
+        case 'saveAll':
+          s.addNotification({ type: 'info', message: 'All files saved' });
+          return;
+        case 'closeTab':
+          if (s.activeTabId) s.closeTab(s.activeTabId);
+          return;
+        case 'closeAllTabs':
+          s.openTabs.forEach(t => s.closeTab(t.id));
+          return;
+        case 'find':
+        case 'replace':
+          // Let Monaco handle these via keyboard events
+          return;
+        case 'findInFiles':
+          s.setActiveActivity('search');
+          return;
+        case 'commandPalette':
+          s.toggleCommandPalette();
+          return;
+        case 'showExplorer':
+          s.setActiveActivity('explorer');
+          return;
+        case 'showSearch':
+          s.setActiveActivity('search');
+          return;
+        case 'showGit':
+          s.setActiveActivity('git');
+          return;
+        case 'showChat':
+          s.toggleChatPanel();
+          return;
+        case 'toggleSidebar':
+          s.toggleSidebar();
+          return;
+        case 'togglePanel':
+          s.togglePanel();
+          return;
+        case 'toggleChat':
+          s.toggleChatPanel();
+          return;
+        case 'toggleMinimap':
+          s.updateSetting('minimapEnabled', !s.settings.minimapEnabled);
+          return;
+        case 'toggleWordWrap':
+          s.updateSetting('wordWrap', s.settings.wordWrap === 'on' ? 'off' : 'on');
+          return;
+        case 'goToFile':
+          s.toggleCommandPalette();
+          return;
+        case 'newTerminal':
+          s.setActivePanelTab('terminal');
+          if (!s.panelVisible) s.togglePanel();
+          return;
+        case 'showWelcome':
+          s.openFile({ path: 'welcome', name: 'Welcome', extension: 'welcome', content: '' });
+          return;
+        case 'showShortcuts':
+          s.setActiveActivity('settings');
+          return;
+        case 'about':
+          s.addNotification({ type: 'info', message: 'guIDE 2.0 — Local-first AI IDE. Built for offline inference.', duration: 8000 });
+          return;
+        default:
+          return;
+      }
+    });
+  }, []);
 
   // Keyboard shortcuts
   useEffect(() => {

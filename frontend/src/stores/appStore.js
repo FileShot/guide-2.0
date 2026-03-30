@@ -118,17 +118,66 @@ const useAppStore = create((set, get) => ({
   chatContextUsage: null,    // {used, total}
   chatIteration: null,       // {iteration, maxIterations}
   streamingFileBlocks: [],   // [{filePath, language, fileName, content, complete}]
+  // R33-Phase4: Chronological segments for correct interleaving of text and file blocks
+  streamingSegments: [],     // [{type:'text', content}, {type:'file', index}]
+  // R39-A1: Live tool call tracking for ToolCallCard rendering during streaming
+  streamingToolCalls: [],    // [{functionName, params, status, startTime, result, duration}]
 
   addChatMessage: (msg) => {
     const { chatMessages } = get();
     set({ chatMessages: [...chatMessages, { ...msg, id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, timestamp: Date.now() }] });
   },
 
-  setChatStreaming: (val) => set({ chatStreaming: val, ...(val ? {} : { chatStreamingText: '', chatThinkingText: '', chatGeneratingTool: null }) }),
+  setChatStreaming: (val) => {
+    if (!val) {
+      // R34: Flush any pending text token buffer before clearing streaming state
+      const store = get();
+      if (store._textTokenTimer) clearTimeout(store._textTokenTimer);
+      if (store._textTokenBuffer) {
+        const buf = store._textTokenBuffer;
+        const newText = store.chatStreamingText + buf;
+        const segs = store.streamingSegments;
+        let newSegs;
+        if (segs.length > 0 && segs[segs.length - 1].type === 'text') {
+          newSegs = [...segs];
+          const lastSeg = newSegs[newSegs.length - 1];
+          newSegs[newSegs.length - 1] = { ...lastSeg, content: lastSeg.content + buf };
+        } else {
+          newSegs = [...segs, { type: 'text', content: buf }];
+        }
+        set({ chatStreamingText: newText, streamingSegments: newSegs, _textTokenBuffer: null, _textTokenTimer: null });
+      }
+    }
+    set({ chatStreaming: val, ...(val ? {} : { chatStreamingText: '', chatThinkingText: '', chatGeneratingTool: null, streamingSegments: [], streamingToolCalls: [], _textTokenBuffer: null, _textTokenTimer: null }) });
+  },
 
   appendStreamToken: (token) => {
-    const { chatStreamingText } = get();
-    set({ chatStreamingText: chatStreamingText + token });
+    // R34: Batch text token appends — accumulate in buffer, flush every 80ms
+    // This prevents 100+/sec set() calls that cause the Footer (and all children) to re-render.
+    const store = get();
+    if (!store._textTokenBuffer) {
+      store._textTokenBuffer = token;
+      store._textTokenTimer = setTimeout(() => {
+        const s = get();
+        if (!s._textTokenBuffer) return;
+        const buf = s._textTokenBuffer;
+        const newText = s.chatStreamingText + buf;
+        const segs = s.streamingSegments;
+        let newSegs;
+        if (segs.length > 0 && segs[segs.length - 1].type === 'text') {
+          newSegs = [...segs];
+          const lastSeg = newSegs[newSegs.length - 1];
+          newSegs[newSegs.length - 1] = { ...lastSeg, content: lastSeg.content + buf };
+        } else {
+          newSegs = [...segs, { type: 'text', content: buf }];
+        }
+        set({ chatStreamingText: newText, streamingSegments: newSegs, _textTokenBuffer: null, _textTokenTimer: null });
+      }, 80);
+      set({ _textTokenBuffer: token, _textTokenTimer: store._textTokenTimer });
+    } else {
+      // Just accumulate — no state update, no re-render
+      store._textTokenBuffer += token;
+    }
   },
 
   appendThinkingToken: (token) => {
@@ -140,29 +189,107 @@ const useAppStore = create((set, get) => ({
   setChatContextUsage: (usage) => set({ chatContextUsage: usage }),
   setChatIteration: (iter) => set({ chatIteration: iter }),
 
+  // R39-A1: Tool call tracking
+  addStreamingToolCall: (tc) => {
+    const { streamingToolCalls } = get();
+    set({ streamingToolCalls: [...streamingToolCalls, tc] });
+  },
+  updateStreamingToolCall: (name, updates) => {
+    const { streamingToolCalls } = get();
+    const idx = streamingToolCalls.findIndex(tc => tc.functionName === name);
+    if (idx === -1) return;
+    const updated = [...streamingToolCalls];
+    updated[idx] = { ...updated[idx], ...updates };
+    set({ streamingToolCalls: updated });
+  },
+
   startFileContentBlock: ({ filePath, language, fileName }) => {
-    const { streamingFileBlocks } = get();
-    set({ streamingFileBlocks: [...streamingFileBlocks, { filePath, language, fileName, content: '', complete: false }] });
+    // R34: Flush pending text buffer before starting file block (ensures correct segment ordering)
+    const store = get();
+    if (store._textTokenTimer) clearTimeout(store._textTokenTimer);
+    let currentText = store.chatStreamingText;
+    let currentSegs = store.streamingSegments;
+    if (store._textTokenBuffer) {
+      const buf = store._textTokenBuffer;
+      currentText = currentText + buf;
+      if (currentSegs.length > 0 && currentSegs[currentSegs.length - 1].type === 'text') {
+        currentSegs = [...currentSegs];
+        const lastSeg = currentSegs[currentSegs.length - 1];
+        currentSegs[currentSegs.length - 1] = { ...lastSeg, content: lastSeg.content + buf };
+      } else {
+        currentSegs = [...currentSegs, { type: 'text', content: buf }];
+      }
+    }
+    // R37-Step4: If a block with the same filePath already exists, resume into it
+    // instead of creating a new block. This prevents multiple blocks appearing
+    // for the same file across continuation iterations.
+    const existingIdx = store.streamingFileBlocks.findIndex(b => b.filePath === filePath && !b.complete);
+    if (existingIdx !== -1) {
+      // Block already exists — just update text/timer state, don't create new block or segment
+      set({ chatStreamingText: currentText, streamingSegments: currentSegs, _textTokenBuffer: null, _textTokenTimer: null });
+      return;
+    }
+    const newBlocks = [...store.streamingFileBlocks, { filePath, language, fileName, content: '', complete: false }];
+    const newSegs = [...currentSegs, { type: 'file', index: newBlocks.length - 1 }];
+    set({ streamingFileBlocks: newBlocks, streamingSegments: newSegs, chatStreamingText: currentText, _textTokenBuffer: null, _textTokenTimer: null });
   },
   appendFileContentToken: (chunk) => {
-    const { streamingFileBlocks } = get();
-    if (streamingFileBlocks.length === 0) return;
-    const updated = [...streamingFileBlocks];
-    const last = { ...updated[updated.length - 1] };
-    last.content += chunk;
-    updated[updated.length - 1] = last;
-    set({ streamingFileBlocks: updated });
+    // R33-Phase2: Batch token appends to reduce re-renders.
+    // Instead of calling set() on every token (100+/sec → stuttering),
+    // accumulate in a pending buffer and flush every 100ms (~10 renders/sec).
+    const store = get();
+    if (store.streamingFileBlocks.length === 0) return;
+    if (!store._fileTokenBuffer) {
+      store._fileTokenBuffer = chunk;
+      store._fileTokenTimer = setTimeout(() => {
+        const s = get();
+        if (!s._fileTokenBuffer) return;
+        const buf = s._fileTokenBuffer;
+        const updated = [...s.streamingFileBlocks];
+        const last = { ...updated[updated.length - 1] };
+        last.content += buf;
+        updated[updated.length - 1] = last;
+        set({ streamingFileBlocks: updated, _fileTokenBuffer: null, _fileTokenTimer: null });
+      }, 100);
+      set({ _fileTokenBuffer: chunk, _fileTokenTimer: store._fileTokenTimer });
+    } else {
+      // Accumulate into existing buffer — no state update needed, just mutate
+      set({ _fileTokenBuffer: store._fileTokenBuffer + chunk });
+    }
   },
   endFileContentBlock: () => {
-    const { streamingFileBlocks } = get();
-    if (streamingFileBlocks.length === 0) return;
+    // R33-Phase2: Flush any pending buffered tokens before marking complete
+    const store = get();
+    if (store._fileTokenTimer) {
+      clearTimeout(store._fileTokenTimer);
+    }
+    const { streamingFileBlocks } = store;
+    if (streamingFileBlocks.length === 0) {
+      set({ _fileTokenBuffer: null, _fileTokenTimer: null });
+      return;
+    }
     const updated = [...streamingFileBlocks];
     const last = { ...updated[updated.length - 1] };
+    if (store._fileTokenBuffer) {
+      last.content += store._fileTokenBuffer;
+    }
     last.complete = true;
     updated[updated.length - 1] = last;
-    set({ streamingFileBlocks: updated });
+    set({ streamingFileBlocks: updated, _fileTokenBuffer: null, _fileTokenTimer: null });
   },
-  clearFileContentBlocks: () => set({ streamingFileBlocks: [] }),
+  // R37-Step8: Expanded state for file content blocks, keyed by filePath.
+  // Lives in the store so it survives component unmount/remount during streaming iterations.
+  fileBlockExpandedStates: {},
+  setFileBlockExpanded: (key, val) => set(s => ({
+    fileBlockExpandedStates: { ...s.fileBlockExpandedStates, [key]: val }
+  })),
+
+  clearFileContentBlocks: () => {
+    const store = get();
+    if (store._fileTokenTimer) clearTimeout(store._fileTokenTimer);
+    if (store._textTokenTimer) clearTimeout(store._textTokenTimer);
+    set({ streamingFileBlocks: [], streamingSegments: [], _fileTokenBuffer: null, _fileTokenTimer: null, _textTokenBuffer: null, _textTokenTimer: null });
+  },
   // R27-D: Update file block content with full accumulated content from append operations
   updateFileBlockContent: ({ filePath, fullContent }) => {
     const { streamingFileBlocks } = get();
@@ -175,18 +302,26 @@ const useAppStore = create((set, get) => ({
     set({ streamingFileBlocks: updated });
   },
 
-  clearChat: () => set({
-    chatMessages: [],
-    chatStreaming: false,
-    chatStreamingText: '',
-    chatThinkingText: '',
-    chatGeneratingTool: null,
-    chatContextUsage: null,
-    chatIteration: null,
-    chatFilesChanged: [],
-    streamingFileBlocks: [],
-    messageQueue: [],
-  }),
+  clearChat: () => {
+    const store = get();
+    if (store._fileTokenTimer) clearTimeout(store._fileTokenTimer);
+    if (store._textTokenTimer) clearTimeout(store._textTokenTimer);
+    set({
+      chatMessages: [],
+      chatStreaming: false,
+      chatStreamingText: '',
+      chatThinkingText: '',
+      chatGeneratingTool: null,
+      chatContextUsage: null,
+      chatIteration: null,
+      chatFilesChanged: [],
+      streamingFileBlocks: [],
+      streamingSegments: [],
+      messageQueue: [],
+      _fileTokenBuffer: null, _fileTokenTimer: null,
+      _textTokenBuffer: null, _textTokenTimer: null,
+    });
+  },
 
   // ─── Files Changed (by AI) ────────────────────────────
   chatFilesChanged: [], // [{path, name, linesAdded, linesRemoved}]

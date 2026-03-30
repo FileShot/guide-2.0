@@ -44,6 +44,8 @@ export default function ChatPanel() {
   const removeChatAttachment = useAppStore(s => s.removeChatAttachment);
   const clearChatAttachments = useAppStore(s => s.clearChatAttachments);
   const streamingFileBlocks = useAppStore(s => s.streamingFileBlocks);
+  const streamingSegments = useAppStore(s => s.streamingSegments);
+  const streamingToolCalls = useAppStore(s => s.streamingToolCalls);
   const messageQueue = useAppStore(s => s.messageQueue);
   const addQueuedMessage = useAppStore(s => s.addQueuedMessage);
   const removeQueuedMessage = useAppStore(s => s.removeQueuedMessage);
@@ -58,6 +60,8 @@ export default function ChatPanel() {
   const inputRef = useRef(null);
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
+  const virtuosoRef = useRef(null);
+  const atBottomRef = useRef(true);
   const [filesChangedExpanded, setFilesChangedExpanded] = useState(false);
   const [dragOver, setDragOver] = useState(false);
 
@@ -115,8 +119,15 @@ export default function ChatPanel() {
     }
   }, [input]);
 
-  const handleSend = useCallback(async () => {
-    const text = input.trim();
+  // R39-A2: Auto-scroll during streaming — Footer content changes don't trigger Virtuoso followOutput
+  useEffect(() => {
+    if (chatStreaming && atBottomRef.current && virtuosoRef.current) {
+      virtuosoRef.current.scrollToIndex({ index: 'LAST', behavior: 'smooth' });
+    }
+  }, [chatStreaming, chatStreamingText, streamingSegments, streamingToolCalls]);
+
+  // Core send logic — takes explicit text param so queue auto-send can use it
+  const doSend = useCallback(async (text) => {
     if (!text || chatStreaming) return;
 
     setInput('');
@@ -159,26 +170,137 @@ export default function ChatPanel() {
         },
       });
 
-      // Finalization: compose file blocks as markdown fences
-      // R27-B: Use fresh getState() — store snapshot from L125 is stale after long await
-      const finalText = useAppStore.getState().chatStreamingText || result?.text || '';
-      const fileBlocks = useAppStore.getState().streamingFileBlocks;
-      let messageContent = finalText;
-      if (fileBlocks.length > 0) {
-        for (const block of fileBlocks) {
-          messageContent += `\n\`\`\`${block.language || 'text'}\n${block.content}\n\`\`\`\n`;
+      // Quota exceeded — show upgrade prompt instead of empty message
+      if (result?.isQuotaError || result?.error === '__QUOTA_EXCEEDED__') {
+        // Check if user has an account
+        let isAuthenticated = false;
+        try {
+          const statusRes = await fetch('/api/license/status');
+          const status = await statusRes.json();
+          isAuthenticated = status?.isAuthenticated || false;
+        } catch (_) {}
+
+        if (!isAuthenticated) {
+          // No account — prompt to create one first
+          useAppStore.getState().addChatMessage({
+            role: 'assistant',
+            content: '',
+            quotaExceeded: true,
+            needsAccount: true,
+          });
+        } else {
+          // Has account but free plan — prompt to upgrade
+          useAppStore.getState().addChatMessage({
+            role: 'assistant',
+            content: '',
+            quotaExceeded: true,
+            needsAccount: false,
+          });
         }
+        return;
+      }
+
+      // Finalization: compose segments chronologically
+      // R33-Phase4: Use streamingSegments for correct ordering
+      // R27-B: Use fresh getState() — store snapshot from L125 is stale after long await
+      // R35-L4: Store segment structure on message for rendering with FileContentBlock
+      const state = useAppStore.getState();
+      const segments = state.streamingSegments;
+      const fileBlocks = state.streamingFileBlocks;
+
+      // Build text-only content for search/backwards compat
+      let messageContent = '';
+      // Build structured segment data for rendering with FileContentBlock
+      const messageSegments = [];
+      const messageFileBlocks = [];
+
+      if (segments.length > 0) {
+        for (const seg of segments) {
+          if (seg.type === 'text') {
+            messageContent += seg.content;
+            messageSegments.push({ type: 'text', content: seg.content });
+          } else if (seg.type === 'file') {
+            const block = fileBlocks[seg.index];
+            if (block) {
+              // Text fallback: still include as markdown fence for content field
+              messageContent += `\n\`\`\`${block.language || 'text'}\n${block.content}\n\`\`\`\n`;
+              // Structured data: reference into messageFileBlocks array
+              messageSegments.push({ type: 'file', index: messageFileBlocks.length });
+              messageFileBlocks.push({
+                filePath: block.filePath,
+                language: block.language,
+                fileName: block.fileName,
+                content: block.content,
+              });
+            }
+          }
+        }
+      } else {
+        // Fallback: no segments (shouldn't happen but defensive)
+        messageContent = state.chatStreamingText || result?.text || '';
+        if (fileBlocks.length > 0) {
+          for (const block of fileBlocks) {
+            messageContent += `\n\`\`\`${block.language || 'text'}\n${block.content}\n\`\`\`\n`;
+            messageSegments.push({ type: 'file', index: messageFileBlocks.length });
+            messageFileBlocks.push({
+              filePath: block.filePath,
+              language: block.language,
+              fileName: block.fileName,
+              content: block.content,
+            });
+          }
+        }
+        if (!messageSegments.length && messageContent) {
+          messageSegments.push({ type: 'text', content: messageContent });
+        }
+      }
+      if (fileBlocks.length > 0) {
         useAppStore.getState().clearFileContentBlocks();
       }
-      if (messageContent) {
-        useAppStore.getState().addChatMessage({ role: 'assistant', content: messageContent });
+      if (messageContent && messageContent.trim()) {
+        // R39-A1: Include tool calls in finalized message
+        const finalToolCalls = useAppStore.getState().streamingToolCalls;
+        useAppStore.getState().addChatMessage({
+          role: 'assistant',
+          content: messageContent,
+          // R35-L4: Structured data for rendering with FileContentBlock
+          segments: messageSegments.length > 0 ? messageSegments : undefined,
+          fileBlocks: messageFileBlocks.length > 0 ? messageFileBlocks : undefined,
+          toolCalls: finalToolCalls.length > 0 ? finalToolCalls : undefined,
+        });
       }
     } catch (err) {
       useAppStore.getState().addChatMessage({ role: 'assistant', content: `Error: ${err.message}` });
     } finally {
       useAppStore.getState().setChatStreaming(false);
     }
-  }, [input, chatStreaming, addChatMessage, autoMode, planMode]);
+  }, [chatStreaming, addChatMessage, autoMode, planMode]);
+
+  // handleSend: reads from input state
+  const handleSend = useCallback(() => {
+    const text = input.trim();
+    if (text) doSend(text);
+  }, [input, doSend]);
+
+  // handleSendQueued: sends explicit text (for queue auto-processing)
+  const handleSendQueued = useCallback((text) => {
+    if (text) doSend(text);
+  }, [doSend]);
+
+  // Auto-process message queue: when streaming ends and queue has items, send next
+  const prevStreamingRef = useRef(chatStreaming);
+  useEffect(() => {
+    if (prevStreamingRef.current && !chatStreaming) {
+      const queue = useAppStore.getState().messageQueue;
+      if (queue.length > 0) {
+        const next = queue[0];
+        useAppStore.getState().removeQueuedMessage(next.id);
+        // Brief delay so finalization renders before next send
+        setTimeout(() => handleSendQueued(next.text), 500);
+      }
+    }
+    prevStreamingRef.current = chatStreaming;
+  }, [chatStreaming, handleSendQueued]);
 
   const handleStop = useCallback(async () => {
     try {
@@ -197,6 +319,14 @@ export default function ChatPanel() {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
+    } else if (e.key === 'Enter' && e.shiftKey && chatStreaming) {
+      // Queue message while AI is streaming
+      e.preventDefault();
+      const text = input.trim();
+      if (text) {
+        addQueuedMessage(text);
+        setInput('');
+      }
     }
   };
 
@@ -234,8 +364,10 @@ export default function ChatPanel() {
       {/* Messages area (virtualized) */}
       <div className="flex-1 min-h-0">
         <Virtuoso
+          ref={virtuosoRef}
           data={chatMessages}
           followOutput="smooth"
+          atBottomStateChange={(atBottom) => { atBottomRef.current = atBottom; }}
           initialTopMostItemIndex={chatMessages.length > 0 ? chatMessages.length - 1 : 0}
           className="scrollbar-thin"
           components={{
@@ -311,23 +443,38 @@ export default function ChatPanel() {
                         <span>Generating: {chatGeneratingTool.functionName}</span>
                       </div>
                     )}
-                    {chatStreamingText && (
-                      <>
-                        <MarkdownRenderer content={chatStreamingText} streaming />
-                        <span className="streaming-cursor" />
-                      </>
-                    )}
-                    {streamingFileBlocks.map((block, i) => (
-                      <FileContentBlock
-                        key={`${block.filePath}-${i}`}
-                        filePath={block.filePath}
-                        language={block.language}
-                        fileName={block.fileName}
-                        content={block.content}
-                        complete={block.complete}
-                      />
+                    {/* R39-A1: Render live tool call cards during streaming */}
+                    {streamingToolCalls.map((tc, i) => (
+                      <ToolCallCard key={`stc-${i}`} toolCall={tc} />
                     ))}
-                    {!chatStreamingText && !chatThinkingText && (
+                    {/* R33-Phase4: Render segments chronologically for correct interleaving */}
+                    {streamingSegments.map((seg, i) => {
+                      if (seg.type === 'text' && seg.content && seg.content.trim()) {
+                        const isLastSeg = i === streamingSegments.length - 1;
+                        return (
+                          <div key={`seg-text-${i}`}>
+                            <MarkdownRenderer content={seg.content} streaming />
+                            {isLastSeg && <span className="streaming-cursor" />}
+                          </div>
+                        );
+                      }
+                      if (seg.type === 'file') {
+                        const block = streamingFileBlocks[seg.index];
+                        if (!block) return null;
+                        return (
+                          <FileContentBlock
+                            key={`seg-file-${seg.index}`}
+                            filePath={block.filePath}
+                            language={block.language}
+                            fileName={block.fileName}
+                            content={block.content}
+                            complete={block.complete}
+                          />
+                        );
+                      }
+                      return null;
+                    })}
+                    {!chatStreamingText && !chatThinkingText && streamingSegments.length === 0 && (
                       <div className="flex items-center gap-1 py-2">
                         <div className="w-1.5 h-1.5 bg-vsc-text-dim rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
                         <div className="w-1.5 h-1.5 bg-vsc-text-dim rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
@@ -380,10 +527,41 @@ export default function ChatPanel() {
                   </div>
                   {msg.role === 'assistant' ? (
                     <>
+                      {/* Quota exceeded upgrade prompt */}
+                      {msg.quotaExceeded ? (
+                        <QuotaExceededPrompt needsAccount={msg.needsAccount} />
+                      ) : (
+                      <>
                       {msg.toolCalls?.map((tc, i) => (
                         <ToolCallCard key={i} toolCall={tc} />
                       ))}
-                      <MarkdownRenderer content={msg.content} />
+                      {/* R35-L4: Use segments + FileContentBlock for file blocks when available */}
+                      {msg.segments && msg.fileBlocks ? (
+                        msg.segments.map((seg, i) => {
+                          if (seg.type === 'text' && seg.content && seg.content.trim()) {
+                            return <MarkdownRenderer key={`seg-${i}`} content={seg.content} />;
+                          }
+                          if (seg.type === 'file') {
+                            const block = msg.fileBlocks[seg.index];
+                            if (!block) return null;
+                            return (
+                              <FileContentBlock
+                                key={`file-${i}`}
+                                filePath={block.filePath}
+                                language={block.language}
+                                fileName={block.fileName}
+                                content={block.content}
+                                complete={true}
+                              />
+                            );
+                          }
+                          return null;
+                        })
+                      ) : (
+                        <MarkdownRenderer content={msg.content} />
+                      )}
+                      </>
+                      )}
                     </>
                   ) : (
                     <div className="whitespace-pre-wrap">{msg.content}</div>
@@ -670,6 +848,72 @@ export default function ChatPanel() {
             currentModel={modelInfo}
           />
         )}
+      </div>
+    </div>
+  );
+}
+
+// ── Quota Exceeded Prompt ──────────────────────────────────────────────────
+function QuotaExceededPrompt({ needsAccount }) {
+  const setActiveActivity = useAppStore(s => s.setActiveActivity);
+  const [upgrading, setUpgrading] = useState(false);
+
+  const handleUpgrade = async () => {
+    setUpgrading(true);
+    try {
+      const res = await fetch('/api/stripe/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plan: 'pro' }),
+      });
+      const data = await res.json();
+      if (data?.success && data.url) {
+        window.open(data.url, '_blank');
+      } else {
+        // If checkout fails (e.g. not signed in), go to account panel
+        setActiveActivity('account');
+      }
+    } catch (_) {
+      setActiveActivity('account');
+    }
+    setUpgrading(false);
+  };
+
+  return (
+    <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4">
+      <div className="flex items-center gap-2 mb-2">
+        <Zap size={16} className="text-amber-400" />
+        <span className="font-medium text-vsc-text">Daily limit reached</span>
+      </div>
+      <p className="text-vsc-sm text-vsc-text-dim mb-3">
+        You've used all 20 free Cloud AI messages for today.
+        {needsAccount
+          ? ' Create a free account to continue, or upgrade to Pro for 5,000 messages per day.'
+          : ' Upgrade to Pro for 5,000 messages per day, or switch to a local model for unlimited usage.'}
+      </p>
+      <div className="flex gap-2">
+        {needsAccount ? (
+          <button
+            onClick={() => setActiveActivity('account')}
+            className="px-3 py-1.5 bg-vsc-accent text-white text-vsc-xs rounded hover:bg-vsc-accent/80 transition-colors font-medium"
+          >
+            Create Account
+          </button>
+        ) : (
+          <button
+            onClick={handleUpgrade}
+            disabled={upgrading}
+            className="px-3 py-1.5 bg-vsc-accent text-white text-vsc-xs rounded hover:bg-vsc-accent/80 transition-colors font-medium"
+          >
+            {upgrading ? 'Opening...' : 'Upgrade to Pro'}
+          </button>
+        )}
+        <button
+          onClick={() => setActiveActivity('models')}
+          className="px-3 py-1.5 border border-vsc-panel-border text-vsc-text-dim text-vsc-xs rounded hover:bg-vsc-list-hover transition-colors"
+        >
+          Use Local Model
+        </button>
       </div>
     </div>
   );

@@ -11,6 +11,7 @@
 // Regex to match filePath in raw tool call JSON — accepts all aliases that
 // mcpToolServer._normalizeFsParams handles.
 const FILE_PATH_RE = /"(?:filePath|file_path|path|filename|file_name|file)"\s*:\s*"([^"]+)"/;
+const { matchFilePathInText, matchContentStartInText } = require('./regexHelpers');
 
 class StreamHandler {
   constructor(mainWindow) {
@@ -29,6 +30,8 @@ class StreamHandler {
     this._contentHoldback = '';          // T58-Fix-C: last N chars held back to strip JSON closing syntax
     this._fileContentActive = false;     // R19: true when file-content events are being sent to frontend
     this._fileContentFilePath = null;    // R19: filePath of the currently active file content block
+    this._suspenseBuffer = '';           // R35-L2: tokens buffered when _fileContentActive but no tool hold
+    this._suspenseMode = false;          // R35-L2: true when suspense buffering is active
   }
 
   /* ── Core send (safe against destroyed windows) ─────────── */
@@ -56,8 +59,28 @@ class StreamHandler {
       // Real tool calls contain "tool": or "tool_calls": within first ~50 chars.
       // Code examples (```json blocks with non-tool content) do not.
       // After 80 chars without a tool call pattern, release as regular text.
-      if (this._holdingFenced && this._toolCallJson.length > 80 && !this._looksLikeToolCall()) {
-        this._send('llm-token', '```json' + this._toolCallJson);
+      // R37-Step2: Also release non-fenced holds after 100 chars without tool pattern.
+      // Continuation iterations set _holdingFenced=false, so without this check
+      // tokens accumulate indefinitely with no release path.
+      const holdLimit = this._holdingFenced ? 80 : 100;
+      if (this._toolCallJson.length > holdLimit && !this._looksLikeToolCall()) {
+        // R37-Step1: If _contentResuming, model is continuing raw file content
+        // without JSON wrapper. Route tokens to file-content instead of llm-token.
+        if (this._contentResuming && this._fileContentActive) {
+          console.log(`[StreamHandler] R37-Step1: Raw continuation detected (${this._toolCallJson.length} chars) — routing to file-content for "${this._fileContentFilePath}"`);
+          this._send('file-content-token', this._toolCallJson);
+          this._cumulativeContentLen = (this._cumulativeContentLen || 0) + this._toolCallJson.length;
+          this._holdingToolCall = false;
+          this._holdingFenced = false;
+          this._toolCallJson = '';
+          // Stay in file-content mode — model is still writing
+          this._contentStreamStarted = false;
+          this._contentStreamSent = 0;
+          this._sent = this._buffer.length;
+          return;
+        }
+        const prefix = this._holdingFenced ? '```json' : '';
+        this._send('llm-token', prefix + this._toolCallJson);
         this._holdingToolCall = false;
         this._holdingFenced = false;
         this._toolCallJson = '';
@@ -118,6 +141,22 @@ class StreamHandler {
     }
 
     // No tool call pattern — safe to send
+    // R35-L2: If _fileContentActive but no tool hold, the model is generating
+    // tokens in iter 2 after stream.reset() cleared _holdingToolCall.
+    // Buffer these tokens instead of flushing as llm-token (which causes naked code).
+    // The suspense buffer is resolved by agenticLoop after generation completes.
+    if (this._fileContentActive && !this._holdingToolCall && !this._holdingFenced) {
+      const unsent2 = this._buffer.slice(this._sent);
+      if (unsent2) {
+        if (!this._suspenseMode) {
+          console.log(`[StreamHandler] R35-L2: Suspense mode ACTIVATED — _fileContentActive="${this._fileContentFilePath}" but no tool hold`);
+          this._suspenseMode = true;
+        }
+        this._suspenseBuffer += unsent2;
+        this._sent = this._buffer.length;
+      }
+      return;
+    }
     this._flush();
   }
 
@@ -258,7 +297,7 @@ class StreamHandler {
       });
 
       // R19: Determine file path and decide whether to start a new block or resume
-      const fpMatch = json.match(FILE_PATH_RE);
+      const fpMatch = matchFilePathInText(json);
       const fp = fpMatch ? fpMatch[1] : '';
 
       if (this._fileContentActive && fp && fp === this._fileContentFilePath) {
@@ -278,11 +317,12 @@ class StreamHandler {
 
         // R15-Fix-C: When file extension is unknown, sniff content type
         if (fenceLabel === 'text') {
-          const contentMatch = json.match(/"content"\s*:\s*"/);  // R22-Fix: also match single quote
+          const contentMatch = matchContentStartInText(json);  // R22-Fix: also match single quote
           if (contentMatch) {
             const snippet = json.substring(contentMatch.index + contentMatch[0].length, contentMatch.index + contentMatch[0].length + 120);
             const unSnippet = snippet.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\"/g, '"').replace(/\\\//g, '/').replace(/\\\\/g, '\\').trimStart();
             if (/^<!DOCTYPE\s+html/i.test(unSnippet) || /^<html[\s>]/i.test(unSnippet)) fenceLabel = 'html';
+            else if (/^(?::root|html|body|\*|@charset|@import|@font-face|@media|@keyframes|\.[\w-]|#[\w-])/.test(unSnippet)) fenceLabel = 'css';
             else if (/^import\s|^from\s|^def\s|^class\s/.test(unSnippet)) fenceLabel = 'python';
             else if (/^(?:import|export|const|let|var|function|class)\s/.test(unSnippet)) fenceLabel = 'javascript';
             else if (/^(?:#include|#pragma|int\s+main)/.test(unSnippet)) fenceLabel = 'c';
@@ -290,6 +330,9 @@ class StreamHandler {
             else if (/^---\n|^title:/.test(unSnippet)) fenceLabel = 'yaml';
           }
         }
+
+        // R35-L5: Normalize the label using file extension as ground truth
+        fenceLabel = StreamHandler.normalizeLanguageLabel(fenceLabel, fp);
 
         const fname = fp.includes('/') ? fp.split('/').pop() : fp.includes('\\') ? fp.split('\\').pop() : fp;
 
@@ -373,7 +416,13 @@ class StreamHandler {
    */
   finalize(isToolCall) {
     // R19: If file content was active but model stopped without a tool call, end the block
-    if (!isToolCall && this._fileContentActive) {
+    // R37-Step3: Only end the file content block if this is the FINAL finalize (no more iterations).
+    // Between iterations, _fileContentActive must survive so the next iteration can resume
+    // into the same block. The agenticLoop calls endFileContent() explicitly when the loop exits.
+    // R37-Fix: Also guard on _suspenseMode — when suspense is active, there's pending content
+    // that hasn't been resolved yet. finalize() must NOT kill _fileContentActive before
+    // resolveSuspense() runs, or the suspended content routes as llm-token (naked text leak).
+    if (!isToolCall && this._fileContentActive && !this._contentResuming && !this._suspenseMode) {
       this._send('file-content-end', { filePath: this._fileContentFilePath });
       this._fileContentActive = false;
       this._fileContentFilePath = null;
@@ -490,6 +539,8 @@ class StreamHandler {
     this._contentHoldback = '';
     // R19: _fileContentActive and _fileContentFilePath survive reset —
     // they track whether a file content block is open across iterations
+    // R35-L2: suspense buffer and mode survive reset — cleared by resolveSuspense()
+    // or explicitly by agenticLoop when the suspense is handled
   }
 
   /**
@@ -507,7 +558,7 @@ class StreamHandler {
   continueToolHold() {
     // Extract filePath and tool name before clearing _toolCallJson
     if (this._toolCallJson.length > 0) {
-      const fpMatch = this._toolCallJson.match(FILE_PATH_RE);
+      const fpMatch = matchFilePathInText(this._toolCallJson);
       const toolMatch = this._toolCallJson.match(/"tool"\s*:\s*"([^"]+)"/);
       if (fpMatch || toolMatch) {
         this._continuationMeta = {
@@ -555,9 +606,113 @@ class StreamHandler {
     }
   }
 
+  /**
+   * R35-L2: Check if there is suspended content from the suspense buffer.
+   */
+  hasSuspendedContent() {
+    return this._suspenseBuffer.length > 0;
+  }
+
+  /**
+   * R35-L2: Get the raw suspended content without resolving it.
+   */
+  getSuspendedContent() {
+    return this._suspenseBuffer;
+  }
+
+  /**
+   * R35-L2: Resolve the suspense buffer by routing content to the appropriate channel.
+   * @param {boolean} isFileContent — if true, send as file-content-token (extends existing block).
+   *                                   if false, send as llm-token (goes to text segment).
+   */
+  resolveSuspense(isFileContent) {
+    if (!this._suspenseBuffer) {
+      this._suspenseMode = false;
+      return;
+    }
+    if (isFileContent && this._fileContentActive) {
+      console.log(`[StreamHandler] R35-L2: Suspense resolved as FILE CONTENT (${this._suspenseBuffer.length} chars) — extending "${this._fileContentFilePath}"`);
+      this._send('file-content-token', this._suspenseBuffer);
+      this._cumulativeContentLen = (this._cumulativeContentLen || 0) + this._suspenseBuffer.length;
+      // R37-Fix: _fileContentActive stays alive — more iterations may follow
+    } else {
+      console.log(`[StreamHandler] R35-L2: Suspense resolved as TEXT (${this._suspenseBuffer.length} chars)`);
+      this._send('llm-token', this._suspenseBuffer);
+      // R37-Fix: If file content was active but suspended content was prose,
+      // the model switched away from file content. End the block now.
+      if (this._fileContentActive) {
+        this._send('file-content-end', { filePath: this._fileContentFilePath });
+        this._fileContentActive = false;
+        this._fileContentFilePath = null;
+      }
+    }
+    this._suspenseBuffer = '';
+    this._suspenseMode = false;
+  }
+
   getFullText()    { return this._buffer; }
   isHoldingTool()  { return this._holdingToolCall; }
   isHoldingFenced() { return this._holdingFenced; }
+
+  /**
+   * R35-L5: Normalize a language label based on file extension.
+   * Maps nonsensical labels (e.g., "php-template" on an HTML file) to the
+   * correct language. Uses file extension as ground truth when available.
+   *
+   * @param {string} label — The language label to normalize
+   * @param {string} filePath — The file path (for extension detection)
+   * @returns {string} — The normalized language label
+   */
+  static normalizeLanguageLabel(label, filePath) {
+    if (!filePath) return label || 'text';
+
+    const ext = filePath.includes('.') ? filePath.split('.').pop().toLowerCase() : '';
+    if (!ext) return label || 'text';
+
+    // Map of file extensions to canonical language names
+    const EXT_TO_LANG = {
+      html: 'html', htm: 'html',
+      css: 'css', scss: 'scss', sass: 'sass', less: 'less',
+      js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
+      ts: 'typescript', tsx: 'typescript',
+      py: 'python',
+      rb: 'ruby',
+      java: 'java',
+      c: 'c', h: 'c',
+      cpp: 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp',
+      cs: 'csharp',
+      go: 'go',
+      rs: 'rust',
+      php: 'php',
+      swift: 'swift',
+      kt: 'kotlin', kts: 'kotlin',
+      r: 'r',
+      sql: 'sql',
+      sh: 'bash', bash: 'bash', zsh: 'bash',
+      ps1: 'powershell', psm1: 'powershell',
+      json: 'json', jsonc: 'json',
+      xml: 'xml', xhtml: 'xml', xaml: 'xml',
+      yaml: 'yaml', yml: 'yaml',
+      md: 'markdown',
+      svg: 'svg',
+      toml: 'toml',
+      ini: 'ini', cfg: 'ini',
+      dockerfile: 'dockerfile',
+      vue: 'vue', svelte: 'svelte',
+    };
+
+    const canonical = EXT_TO_LANG[ext];
+    if (canonical) {
+      // If the label doesn't match the extension, override it
+      if (label && label.toLowerCase() !== canonical) {
+        console.log(`[StreamHandler] R35-L5: Normalized language label "${label}" -> "${canonical}" (ext="${ext}")`);
+      }
+      return canonical;
+    }
+
+    // Extension not in map — trust the label or fallback to extension
+    return label || ext || 'text';
+  }
 
   /**
    * Atomic tool checkpoint — sends finalize + executing + results as ONE IPC event.

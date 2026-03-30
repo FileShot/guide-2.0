@@ -3,7 +3,7 @@
  * Theme-aware — all colors from CSS variables.
  */
 import useAppStore from '../stores/appStore';
-import { Files, Search, GitBranch, MessageSquare, Blocks, Settings, Bug, UserCircle } from 'lucide-react';
+import { Files, Search, GitBranch, MessageSquare, Blocks, Settings, Bug, UserCircle, Globe } from 'lucide-react';
 
 const activities = [
   { id: 'explorer', icon: Files, label: 'Explorer (Ctrl+Shift+E)' },
@@ -11,6 +11,7 @@ const activities = [
   { id: 'git', icon: GitBranch, label: 'Source Control (Ctrl+Shift+G)' },
   { id: 'debug', icon: Bug, label: 'Run and Debug (Ctrl+Shift+D)' },
   { id: 'extensions', icon: Blocks, label: 'Extensions (Ctrl+Shift+X)' },
+  { id: 'browser', icon: Globe, label: 'Browser Preview' },
 ];
 
 export default function ActivityBar() {

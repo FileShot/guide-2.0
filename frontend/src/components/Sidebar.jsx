@@ -6,6 +6,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import useAppStore from '../stores/appStore';
 import { useTheme, themeList } from './ThemeProvider';
 import AccountPanel from './AccountPanel';
+import BrowserPanel from './BrowserPanel';
 import FileIcon from './FileIcon';
 import {
   ChevronRight, ChevronDown, FileCode,
@@ -27,6 +28,7 @@ export default function Sidebar() {
     case 'settings': return <SettingsPanel />;
     case 'debug': return <DebugPanel />;
     case 'extensions': return <ExtensionsPanel />;
+    case 'browser': return <BrowserPanel />;
     case 'account': return <AccountPanel />;
     default: return <FileExplorer />;
   }

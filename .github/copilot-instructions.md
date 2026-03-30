@@ -292,13 +292,10 @@ If you have not read every relevant line, you are NOT certain. Say so.
 
 ## SERVER RULES
 
-- NEVER run `node server.js` from agent tools — it causes "Focus terminal" popup that kills the agent response
-- Instead: give the user this one-liner to paste:
-  ```
-  Get-NetTCPConnection -LocalPort 3200 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }; Start-Sleep -Seconds 2; cd C:\Users\brend\guide-2.0; $env:TEST_MAX_CONTEXT="8000"; node server/main.js
-  ```
+- When told to start the server, START IT. Use `run_in_terminal` with `isBackground=true`. No asking. No pasting one-liners. No arguing.
+- Kill only the specific PID on the port first, then start: `Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -ne 0 } | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }; Start-Sleep -Seconds 2; cd C:\Users\brend\guide-2.0; $env:TEST_MAX_CONTEXT="8000"; node server/main.js`
 - NEVER kill all node processes — the user runs 7+ sites on this machine
-- To stop the server: kill only the specific PID on port 3200
+- To stop the server: kill only the specific PID on port 3000
 
 ---
 

@@ -109,15 +109,25 @@ export default function Layout() {
 
       {/* Model Loading Overlay */}
       {modelLoading && (
-        <div className="fixed bottom-12 left-1/2 -translate-x-1/2 z-50 bg-vsc-sidebar border border-vsc-panel-border rounded-lg px-4 py-3 shadow-xl flex items-center gap-3">
+        <div className="fixed bottom-12 left-1/2 -translate-x-1/2 z-50 border border-vsc-panel-border rounded-xl px-5 py-3.5 flex items-center gap-3"
+          style={{
+            background: 'rgb(var(--guide-sidebar) / 0.9)',
+            backdropFilter: 'blur(16px)',
+            WebkitBackdropFilter: 'blur(16px)',
+            boxShadow: '0 20px 40px -12px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.05)',
+          }}
+        >
           <div className="spinner" />
           <div>
             <div className="text-vsc-sm text-vsc-text-bright font-medium">Loading Model...</div>
             {modelLoadProgress > 0 && (
-              <div className="mt-1 w-40 h-1.5 bg-vsc-panel-border rounded-full overflow-hidden">
+              <div className="mt-1.5 w-44 h-1.5 bg-vsc-panel-border rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-vsc-accent rounded-full transition-all duration-300"
-                  style={{ width: `${modelLoadProgress}%` }}
+                  className="h-full rounded-full transition-all duration-300"
+                  style={{
+                    width: `${modelLoadProgress}%`,
+                    background: `linear-gradient(90deg, rgb(var(--guide-accent)), rgb(var(--guide-accent-hover)))`,
+                  }}
                 />
               </div>
             )}

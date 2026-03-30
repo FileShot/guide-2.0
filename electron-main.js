@@ -15,6 +15,8 @@ const path = require('path');
 const { fork } = require('child_process');
 const http = require('http');
 const net = require('net');
+const { buildAppMenu } = require('./appMenu');
+const { AutoUpdater } = require('./autoUpdater');
 
 // ─── GPU / V8 flags (match old IDE) ─────────────────────────────────
 app.commandLine.appendSwitch('disable-gpu-sandbox');
@@ -178,6 +180,13 @@ app.whenReady().then(async () => {
   }
 
   createWindow(serverPort);
+  buildAppMenu(mainWindow);
+
+  // Auto-updater — check for updates after launch
+  const updater = new AutoUpdater(mainWindow, { autoDownload: false });
+  updater.registerIPC(ipcMain);
+  // Check for updates 5 seconds after startup (don't block launch)
+  setTimeout(() => updater.checkForUpdates(), 5000);
 });
 
 app.on('second-instance', () => {

@@ -132,18 +132,37 @@
 }
 
 @layer components {
+  /* ─── Glass Card ────────────────────────────────────── */
+  .glass-card {
+    background: rgba(255, 255, 255, 0.025);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    backdrop-filter: blur(16px) saturate(140%);
+    -webkit-backdrop-filter: blur(16px) saturate(140%);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2), 0 1px 0 rgba(255, 255, 255, 0.03) inset;
+  }
+  .glass-card:hover {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(255, 255, 255, 0.1);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25), 0 1px 0 rgba(255, 255, 255, 0.05) inset;
+  }
+
   /* ─── Activity Bar ──────────────────────────────────── */
   .activity-bar-icon {
     @apply w-12 h-12 flex items-center justify-center text-vsc-text-dim;
-    @apply hover:text-vsc-text-bright cursor-pointer transition-colors duration-100;
+    @apply cursor-pointer transition-all duration-150;
+  }
+  .activity-bar-icon:hover {
+    @apply text-vsc-text-bright;
+    background: rgb(var(--guide-list-hover) / 0.6);
   }
   .activity-bar-icon.active {
     @apply text-vsc-text-bright relative;
   }
   .activity-bar-icon.active::before {
     content: '';
-    @apply absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-6;
+    @apply absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 rounded-r;
     background: rgb(var(--guide-accent));
+    box-shadow: 0 0 8px rgb(var(--guide-accent) / 0.4);
   }
 
   /* ─── Sidebar ───────────────────────────────────────── */
@@ -155,16 +174,24 @@
   .sidebar-section-header {
     @apply h-[22px] flex items-center px-2 text-[11px] uppercase tracking-wider font-bold;
     @apply bg-vsc-sidebar text-vsc-text cursor-pointer select-none;
-    @apply hover:bg-vsc-list-hover;
+    @apply hover:bg-vsc-list-hover transition-colors duration-150;
   }
 
   /* ─── File Tree ─────────────────────────────────────── */
   .file-tree-item {
     @apply h-[22px] flex items-center gap-1 px-2 text-vsc-sm cursor-pointer select-none;
-    @apply hover:bg-vsc-list-hover;
+    @apply hover:bg-vsc-list-hover transition-all duration-100;
+    border-left: 2px solid transparent;
+    border-radius: 3px;
+    margin: 0 2px;
+  }
+  .file-tree-item:hover {
+    border-left-color: rgb(var(--guide-accent) / 0.3);
   }
   .file-tree-item.active {
     @apply bg-vsc-list-active text-vsc-text-bright;
+    border-left-color: rgb(var(--guide-accent));
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15) inset;
   }
   .file-tree-item.focused {
     @apply bg-vsc-list-focus;
@@ -174,13 +201,14 @@
   .editor-tab {
     @apply h-[35px] flex items-center gap-1.5 px-3 text-vsc-sm cursor-pointer select-none;
     @apply bg-vsc-tab-inactive text-vsc-text-dim border-r border-vsc-tab-border;
-    @apply hover:bg-vsc-tab-active;
+    @apply hover:bg-vsc-tab-active transition-all duration-150;
     min-width: 120px;
     max-width: 200px;
   }
   .editor-tab.active {
     @apply bg-vsc-tab-active text-vsc-text-bright;
     border-top: 1px solid rgb(var(--guide-accent));
+    box-shadow: 0 1px 0 rgb(var(--guide-tab-active)) inset;
   }
   .editor-tab .close-btn {
     @apply ml-auto p-0.5 rounded-sm opacity-0 hover:bg-vsc-list-hover;
@@ -193,16 +221,23 @@
   /* ─── Status Bar ────────────────────────────────────── */
   .statusbar-item {
     @apply h-full flex items-center px-2 text-[12px] cursor-pointer select-none;
-    @apply hover:bg-vsc-text-bright/10 transition-colors duration-75;
+    @apply hover:bg-vsc-text-bright/10 transition-colors duration-100;
+    border-right: 1px solid rgb(var(--guide-panel-border) / 0.3);
+  }
+  .statusbar-item:last-child {
+    border-right: none;
   }
 
   /* ─── Panel ─────────────────────────────────────────── */
   .panel-tab {
     @apply h-[35px] flex items-center px-3 text-vsc-sm cursor-pointer select-none uppercase tracking-wider;
-    @apply text-vsc-text-dim hover:text-vsc-text border-b-2 border-transparent;
+    @apply text-vsc-text-dim hover:text-vsc-text transition-colors duration-150;
+    border-bottom: 2px solid transparent;
   }
   .panel-tab.active {
-    @apply text-vsc-text-bright border-vsc-accent;
+    @apply text-vsc-text-bright;
+    border-image: linear-gradient(90deg, rgb(var(--guide-accent)), rgb(var(--guide-accent-hover))) 1;
+    border-bottom-width: 2px;
   }
 
   /* ─── Chat ──────────────────────────────────────────── */
@@ -210,14 +245,18 @@
     @apply px-4 py-3 text-vsc-base leading-relaxed;
   }
   .chat-message.user {
-    @apply bg-vsc-list-hover;
+    @apply bg-vsc-list-hover/60;
+    border-bottom: 1px solid rgb(var(--guide-panel-border) / 0.15);
   }
   .chat-message.assistant {
     @apply bg-transparent;
+    border-bottom: 1px solid rgb(var(--guide-panel-border) / 0.08);
   }
 
   .chat-message pre {
-    @apply bg-vsc-bg rounded-md p-3 my-2 overflow-x-auto text-vsc-sm;
+    @apply bg-vsc-bg rounded-lg p-3 my-2 overflow-x-auto text-vsc-sm;
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3), 0 1px 0 rgba(255, 255, 255, 0.03);
+    border: 1px solid rgb(var(--guide-panel-border) / 0.3);
   }
   .chat-message code:not(pre code) {
     @apply bg-vsc-input px-1 py-0.5 rounded text-vsc-sm;
@@ -263,11 +302,16 @@
 
   /* ─── Command Palette ───────────────────────────────── */
   .command-palette-overlay {
-    @apply fixed inset-0 bg-black/50 z-50 flex justify-center pt-[15vh];
+    @apply fixed inset-0 z-50 flex justify-center pt-[15vh];
+    background: rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
   }
   .command-palette {
-    @apply w-[600px] max-h-[400px] bg-vsc-sidebar border border-vsc-panel-border rounded-md shadow-2xl;
-    @apply flex flex-col overflow-hidden;
+    @apply w-[600px] max-h-[400px] border border-vsc-panel-border rounded-xl overflow-hidden;
+    @apply flex flex-col;
+    background: rgb(var(--guide-sidebar));
+    box-shadow: 0 25px 60px -12px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.05), 0 0 40px rgba(0, 0, 0, 0.3);
   }
   .command-palette-input {
     @apply w-full h-[36px] px-3 bg-vsc-input border-b border-vsc-panel-border;
@@ -283,8 +327,12 @@
 
   /* ─── Notification Toast ────────────────────────────── */
   .notification-toast {
-    @apply fixed bottom-8 right-4 z-50 max-w-[450px] bg-vsc-sidebar border border-vsc-panel-border;
-    @apply rounded-md shadow-2xl p-3 animate-slide-up;
+    @apply fixed bottom-8 right-4 z-50 max-w-[450px] border border-vsc-panel-border;
+    @apply rounded-xl p-3 animate-slide-up;
+    background: rgb(var(--guide-sidebar));
+    backdrop-filter: blur(20px) saturate(150%);
+    -webkit-backdrop-filter: blur(20px) saturate(150%);
+    box-shadow: 0 20px 50px -12px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.05), 0 0 30px rgba(0, 0, 0, 0.2);
   }
 
   /* ─── Context Menu ──────────────────────────────────── */
@@ -346,11 +394,25 @@
   /* ─── Splitter ──────────────────────────────────────── */
   .splitter-v {
     @apply w-[3px] cursor-col-resize flex-shrink-0;
-    @apply hover:bg-vsc-accent active:bg-vsc-accent transition-colors;
+    @apply transition-all duration-150;
+    background: transparent;
+  }
+  .splitter-v:hover {
+    background: linear-gradient(180deg, transparent, rgb(var(--guide-accent) / 0.5), transparent);
+  }
+  .splitter-v:active {
+    background: rgb(var(--guide-accent));
   }
   .splitter-h {
     @apply h-[3px] cursor-row-resize flex-shrink-0;
-    @apply hover:bg-vsc-accent active:bg-vsc-accent transition-colors;
+    @apply transition-all duration-150;
+    background: transparent;
+  }
+  .splitter-h:hover {
+    background: linear-gradient(90deg, transparent, rgb(var(--guide-accent) / 0.5), transparent);
+  }
+  .splitter-h:active {
+    background: rgb(var(--guide-accent));
   }
 }
 
@@ -535,14 +597,7 @@
   font-weight: bold;
 }
 
-/* ─── Splitter active/hover indicator ────────────────── */
-.splitter-v:hover::after,
-.splitter-h:hover::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: rgb(var(--guide-accent) / 0.4);
-}
+/* ─── Splitter positioning ───────────────────────────── */
 .splitter-v { position: relative; }
 .splitter-h { position: relative; }
 

@@ -1,53 +1,32 @@
 /**
  * FileContentBlock — Renders a single file being generated via file-content events.
  * Shows filename, growing line count, raw content, collapse/expand, copy, download.
- * Uses ref+interval for line counting to avoid React #185.
+ * R34: Inline styles for height (bypass Tailwind JIT). React.memo to prevent unnecessary re-renders.
+ * R36-Phase1: Auto-scroll collapsed view to show trailing content during streaming.
+ * R37-Step8: Expanded state lifted to Zustand store — survives component unmount/remount
+ *            across continuation iterations. Key = filePath.
+ * R37-Step9: Bottom padding on pre when streaming+collapsed so newest lines are visible
+ *            above the gradient overlay instead of being hidden under it.
  */
-import { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { Copy, Check, Download, ChevronDown, ChevronRight, FileCode, Loader } from 'lucide-react';
+import useAppStore from '../../stores/appStore';
 
 const COLLAPSE_THRESHOLD = 15;
-const LINE_COUNT_INTERVAL = 500;
 
-export default function FileContentBlock({ filePath, language, fileName, content, complete }) {
+const FileContentBlock = React.memo(function FileContentBlock({ filePath, language, fileName, content, complete }) {
   const [copied, setCopied] = useState(false);
-  const [collapsed, setCollapsed] = useState(true);
+  const scrollContainerRef = useRef(null);
   const contentRef = useRef(null);
-  const lineCountRef = useRef(0);
-  const [lineCount, setLineCount] = useState(0);
 
-  // Ref+interval pattern: MutationObserver updates ref, interval syncs to state
-  useEffect(() => {
-    const el = contentRef.current;
-    if (!el) return;
+  // R37-Step8: Read/write expanded state from the store so it survives unmount/remount.
+  const expanded = useAppStore(state => state.fileBlockExpandedStates[filePath] || false);
+  const setFileBlockExpanded = useAppStore(state => state.setFileBlockExpanded);
 
-    const syncCount = () => {
-      const text = el.textContent || '';
-      const count = text ? text.split('\n').length : 0;
-      if (count !== lineCountRef.current) {
-        lineCountRef.current = count;
-        setLineCount(count);
-      }
-    };
-
-    // Initial count
-    syncCount();
-
-    // Watch for DOM changes
-    const observer = new MutationObserver(() => {
-      const text = el.textContent || '';
-      lineCountRef.current = text ? text.split('\n').length : 0;
-    });
-    observer.observe(el, { childList: true, subtree: true, characterData: true });
-
-    // Sync ref to state at fixed interval (max 2 re-renders/sec)
-    const interval = setInterval(syncCount, LINE_COUNT_INTERVAL);
-
-    return () => {
-      observer.disconnect();
-      clearInterval(interval);
-    };
-  }, []);
+  const lineCount = useMemo(() => {
+    if (!content) return 0;
+    return content.split('\n').length;
+  }, [content]);
 
   const handleCopy = useCallback(async () => {
     try {
@@ -81,12 +60,37 @@ export default function FileContentBlock({ filePath, language, fileName, content
     URL.revokeObjectURL(url);
   }, [content, fileName, filePath]);
 
+  const handleExpand = useCallback((e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setFileBlockExpanded(filePath, true);
+  }, [filePath, setFileBlockExpanded]);
+
+  const handleCollapse = useCallback((e) => {
+    if (e) { e.stopPropagation(); e.preventDefault(); }
+    setFileBlockExpanded(filePath, false);
+  }, [filePath, setFileBlockExpanded]);
+
   const displayName = fileName || (filePath ? filePath.split(/[/\\]/).pop() : 'file');
   const isCollapsible = lineCount > COLLAPSE_THRESHOLD;
-  // R22-Fix5: Use content length as a proxy before lineCount is measured.
-  // This prevents the flash-full-then-collapse glitch on first render.
-  const likelyLong = content.length > 500;
-  const isCollapsed = collapsed && (isCollapsible || (lineCount === 0 && likelyLong));
+  const isCollapsed = !expanded && isCollapsible;
+
+  // R36-Phase1: Auto-scroll collapsed view to show trailing content during streaming.
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (el && !complete && isCollapsed) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [content, complete, isCollapsed]);
+
+  // Inline styles — bypass Tailwind JIT entirely
+  const contentStyle = isCollapsed
+    ? { maxHeight: '240px', overflowY: complete ? 'hidden' : 'auto', overflowX: 'auto' }
+    : { maxHeight: '80vh', overflowY: 'auto', overflowX: 'auto' };
+
+  // R37-Step9: When streaming+collapsed, pad bottom of content by overlay height (~80px)
+  // so the newest streamed line appears above the gradient instead of under it.
+  const preStyle = (isCollapsed && !complete) ? { paddingBottom: '80px' } : undefined;
 
   return (
     <div className="code-block-container group relative my-2 rounded-md overflow-hidden border border-vsc-panel-border/40">
@@ -121,27 +125,27 @@ export default function FileContentBlock({ filePath, language, fileName, content
 
       {/* Content */}
       <div className="relative">
-        <div className={`overflow-x-auto ${isCollapsed ? 'max-h-[240px] overflow-y-hidden' : 'max-h-[500px] overflow-y-auto'}`}>
-          <pre className="!m-0 !rounded-none !border-0 p-3 text-vsc-sm leading-relaxed bg-vsc-bg">
+        <div ref={scrollContainerRef} style={contentStyle}>
+          <pre className="!m-0 !rounded-none !border-0 p-3 text-vsc-sm leading-relaxed bg-vsc-bg" style={preStyle}>
             <code ref={contentRef}>{content}</code>
           </pre>
         </div>
         {isCollapsed && (
-          <div className="absolute bottom-0 left-0 right-0">
+          <div className="absolute bottom-0 left-0 right-0" style={{ zIndex: 2 }}>
             <div className="h-12 bg-gradient-to-t from-vsc-bg to-transparent pointer-events-none" />
             <button
               className="w-full py-1.5 bg-vsc-bg text-vsc-xs text-vsc-accent hover:text-vsc-accent-hover flex items-center justify-center gap-1 border-t border-vsc-panel-border/20"
-              onClick={() => setCollapsed(false)}
+              onClick={handleExpand}
             >
               <ChevronDown size={12} />
               Show more ({lineCount} lines)
             </button>
           </div>
         )}
-        {!collapsed && (isCollapsible || likelyLong) && (
+        {!isCollapsed && isCollapsible && (
           <button
             className="w-full py-1 bg-vsc-sidebar/60 text-vsc-xs text-vsc-text-dim hover:text-vsc-text flex items-center justify-center gap-1 border-t border-vsc-panel-border/20"
-            onClick={() => setCollapsed(true)}
+            onClick={handleCollapse}
           >
             <ChevronRight size={12} className="rotate-[-90deg]" />
             Show less
@@ -150,4 +154,6 @@ export default function FileContentBlock({ filePath, language, fileName, content
       </div>
     </div>
   );
-}
+});
+
+export default FileContentBlock;

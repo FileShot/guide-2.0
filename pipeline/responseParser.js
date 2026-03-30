@@ -10,6 +10,8 @@
  */
 'use strict';
 
+const { matchContentValueInText } = require('./regexHelpers');
+
 /**
  * Parse a model response into display text and tool calls.
  * @param {string} rawText  — Full raw text from the model
@@ -416,8 +418,10 @@ function extractContentFromPartialToolCall(buffer) {
   // This handles write_file calls that got truncated
   const patterns = [
     /"content"\s*:\s*"([\s\S]*)/i,           // "content": "...
+    /\\?"content\\?"\s*:\s*\\?"([\s\S]*)/i, // R29: escaped quotes
     /"content"\s*:\s*`([\s\S]*)/i,           // "content": `...
     /"fileContent"\s*:\s*"([\s\S]*)/i,       // "fileContent": "...
+    /\\?"fileContent\\?"\s*:\s*\\?"([\s\S]*)/i, // R29: escaped quotes
     /```[\w]*\n([\s\S]*)$/,                  // Code block at end
   ];
   
@@ -472,9 +476,9 @@ function extractContentFromPartialToolCall(buffer) {
         content = content.substring(0, embeddedToolCallIdx).trimEnd();
       }
       // Also handle: if content itself IS a tool call wrapper (starts with it)
-      if (/^\s*\{\s*"tool"\s*:\s*"/.test(content)) {
+      if (/^\s*\{\s*\\?"tool\\?"\s*:\s*\\?"/.test(content)) {
         // The extraction grabbed a tool call wrapper as content — recurse one level
-        const innerMatch = content.match(/"content"\s*:\s*"([\s\S]*)/i);
+        const innerMatch = matchContentValueInText(content);
         if (innerMatch && innerMatch[1]) {
           let inner = innerMatch[1];
           const innerEnd = _findJsonStringEnd(inner);

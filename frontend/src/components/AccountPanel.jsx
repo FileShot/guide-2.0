@@ -2,17 +2,19 @@
  * AccountPanel — License activation, OAuth sign-in, account management.
  * Three states: signed-in (activated), authenticated (free plan), sign-in form.
  */
-import { useState, useEffect, useCallback } from 'react';
-import { UserCircle, Check, Shield, ExternalLink, LogOut, Key, Mail, Github } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { UserCircle, Check, Shield, ExternalLink, LogOut, Key, Mail, Github, UserPlus } from 'lucide-react';
 
 export default function AccountPanel() {
   const [licenseStatus, setLicenseStatus] = useState(null);
-  const [tab, setTab] = useState('signin'); // 'signin' | 'key'
+  const [tab, setTab] = useState('signin'); // 'signin' | 'key' | 'register'
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [name, setName] = useState('');
   const [licenseKey, setLicenseKey] = useState('');
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const oauthPollRef = useRef(null);
 
   const loadStatus = useCallback(async () => {
     try {
@@ -23,6 +25,11 @@ export default function AccountPanel() {
   }, []);
 
   useEffect(() => { loadStatus(); }, [loadStatus]);
+
+  // Cleanup OAuth poll on unmount
+  useEffect(() => {
+    return () => { if (oauthPollRef.current) clearInterval(oauthPollRef.current); };
+  }, []);
 
   const showMessage = (msg, duration = 4000) => {
     setMessage(msg);
@@ -39,26 +46,44 @@ export default function AccountPanel() {
         body: JSON.stringify({ provider }),
       });
       const result = await res.json();
-      if (result?.success) {
-        setLicenseStatus({
-          isActivated: true, isAuthenticated: true,
-          license: result.license,
-          machineId: licenseStatus?.machineId || '',
-        });
-        showMessage('Signed in successfully');
-      } else if (result?.authenticated && result?.email) {
-        setLicenseStatus({
-          isActivated: false, isAuthenticated: true,
-          license: { key: null, activatedAt: null, lastValidated: null, email: result.email, plan: 'free', expiresAt: null, authMethod: 'oauth' },
-          machineId: licenseStatus?.machineId || '',
-        });
-        showMessage('Signed in successfully');
+      if (result?.success && result?.url) {
+        // Open OAuth URL in external browser
+        if (window.electronAPI?.openExternal) {
+          window.electronAPI.openExternal(result.url);
+        } else {
+          window.open(result.url, '_blank', 'noopener');
+        }
+        // Poll for authentication completion
+        showMessage('Waiting for sign-in to complete...', 0);
+        if (oauthPollRef.current) clearInterval(oauthPollRef.current);
+        let attempts = 0;
+        oauthPollRef.current = setInterval(async () => {
+          attempts++;
+          if (attempts > 60) { // 2min timeout
+            clearInterval(oauthPollRef.current);
+            oauthPollRef.current = null;
+            setLoading(false);
+            showMessage('Sign-in timed out. Please try again.');
+            return;
+          }
+          try {
+            const statusRes = await fetch('/api/account/status');
+            const status = await statusRes.json();
+            if (status?.isAuthenticated) {
+              clearInterval(oauthPollRef.current);
+              oauthPollRef.current = null;
+              await loadStatus();
+              setLoading(false);
+              showMessage('Signed in successfully');
+            }
+          } catch (_) {}
+        }, 2000);
       } else {
         showMessage(result?.error || 'Sign-in failed');
+        setLoading(false);
       }
     } catch (e) {
       showMessage(e.message || 'Sign-in failed');
-    } finally {
       setLoading(false);
     }
   };
@@ -117,6 +142,33 @@ export default function AccountPanel() {
       }
     } catch (e) {
       showMessage(e.message || 'Activation failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRegister = async () => {
+    if (!email.trim() || !password) return;
+    setLoading(true);
+    showMessage('Creating account...', 0);
+    try {
+      const res = await fetch('/api/account/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.trim(), password, name: name.trim() || undefined }),
+      });
+      const result = await res.json();
+      if (result?.success) {
+        await loadStatus();
+        setEmail('');
+        setPassword('');
+        setName('');
+        showMessage('Account created successfully');
+      } else {
+        showMessage(result?.error || 'Registration failed');
+      }
+    } catch (e) {
+      showMessage(e.message || 'Registration failed');
     } finally {
       setLoading(false);
     }
@@ -322,7 +374,7 @@ export default function AccountPanel() {
         <div className="flex-1 h-px bg-vsc-panel-border" />
       </div>
 
-      {/* Tab selector: Sign In / License Key */}
+      {/* Tab selector: Sign In / Register / License Key */}
       <div className="flex rounded overflow-hidden mb-2 border border-vsc-panel-border">
         <button
           onClick={() => setTab('signin')}
@@ -332,7 +384,17 @@ export default function AccountPanel() {
             color: tab === 'signin' ? '#fff' : undefined,
           }}
         >
-          <Mail size={10} /> Email
+          <Mail size={10} /> Sign In
+        </button>
+        <button
+          onClick={() => setTab('register')}
+          className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-[10px] font-medium transition-colors"
+          style={{
+            backgroundColor: tab === 'register' ? 'var(--vsc-accent, #007acc)' : 'transparent',
+            color: tab === 'register' ? '#fff' : undefined,
+          }}
+        >
+          <UserPlus size={10} /> Register
         </button>
         <button
           onClick={() => setTab('key')}
@@ -342,7 +404,7 @@ export default function AccountPanel() {
             color: tab === 'key' ? '#fff' : undefined,
           }}
         >
-          <Key size={10} /> License Key
+          <Key size={10} /> Key
         </button>
       </div>
 
@@ -370,6 +432,40 @@ export default function AccountPanel() {
             className="w-full px-3 py-2 text-[11px] font-medium rounded transition-colors disabled:opacity-50 bg-vsc-accent text-white"
           >
             {loading ? 'Signing in...' : 'Sign In'}
+          </button>
+        </div>
+      ) : tab === 'register' ? (
+        <div className="space-y-2">
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Name (optional)"
+            className="w-full rounded px-2.5 py-2 text-[11px] outline-none transition-colors bg-vsc-sidebar-bg border border-vsc-panel-border text-vsc-foreground"
+            spellCheck={false}
+          />
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="Email"
+            className="w-full rounded px-2.5 py-2 text-[11px] outline-none transition-colors bg-vsc-sidebar-bg border border-vsc-panel-border text-vsc-foreground"
+            spellCheck={false}
+          />
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Password"
+            className="w-full rounded px-2.5 py-2 text-[11px] outline-none transition-colors bg-vsc-sidebar-bg border border-vsc-panel-border text-vsc-foreground"
+            onKeyDown={(e) => e.key === 'Enter' && handleRegister()}
+          />
+          <button
+            onClick={handleRegister}
+            disabled={loading || !email.trim() || !password}
+            className="w-full px-3 py-2 text-[11px] font-medium rounded transition-colors disabled:opacity-50 bg-vsc-accent text-white"
+          >
+            {loading ? 'Creating account...' : 'Create Account'}
           </button>
         </div>
       ) : (
@@ -402,12 +498,21 @@ export default function AccountPanel() {
 
       {/* Get a license link */}
       <div className="mt-auto pt-4">
-        <button
-          onClick={() => openExternal('https://graysoft.dev/register')}
-          className="text-[10px] transition-colors hover:underline text-vsc-accent"
-        >
-          Don't have an account? Create one
-        </button>
+        {tab !== 'register' ? (
+          <button
+            onClick={() => setTab('register')}
+            className="text-[10px] transition-colors hover:underline text-vsc-accent"
+          >
+            Don't have an account? Create one
+          </button>
+        ) : (
+          <button
+            onClick={() => setTab('signin')}
+            className="text-[10px] transition-colors hover:underline text-vsc-accent"
+          >
+            Already have an account? Sign in
+          </button>
+        )}
         <p className="text-[9px] mt-1.5 text-vsc-foreground/30">
           Free plan includes local AI. Pro $4.99/mo for cloud AI.
         </p>

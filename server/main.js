@@ -117,6 +117,14 @@ const { SessionStore } = require(path.join(ROOT_DIR, 'sessionStore'));
 const { DEFAULT_SYSTEM_PREAMBLE, DEFAULT_COMPACT_PREAMBLE, DEFAULT_CHAT_PREAMBLE } = require(path.join(ROOT_DIR, 'constants'));
 const { ConversationSummarizer } = require(path.join(ROOT_DIR, 'pipeline', 'conversationSummarizer'));
 const { CloudLLMService } = require(path.join(ROOT_DIR, 'cloudLLMService'));
+const { SettingsManager } = require(path.join(ROOT_DIR, 'settingsManager'));
+const { GitManager } = require(path.join(ROOT_DIR, 'gitManager'));
+const { BrowserManager } = require(path.join(ROOT_DIR, 'browserManager'));
+const { FirstRunSetup } = require(path.join(ROOT_DIR, 'firstRunSetup'));
+const { AutoUpdater } = require(path.join(ROOT_DIR, 'autoUpdater'));
+const { RAGEngine } = require(path.join(ROOT_DIR, 'ragEngine'));
+const { AccountManager } = require(path.join(ROOT_DIR, 'accountManager'));
+const { LicenseManager } = require(path.join(ROOT_DIR, 'licenseManager'));
 const { ModelDownloader } = require(path.join(__dirname, 'modelDownloader'));
 const liveServer = require(path.join(__dirname, 'liveServer'));
 const agenticChat = require(path.join(ROOT_DIR, 'agenticChat'));
@@ -125,34 +133,52 @@ const agenticChat = require(path.join(ROOT_DIR, 'agenticChat'));
 console.log('[Server] Initializing pipeline components...');
 
 const llmEngine = new LLMEngine();
-const mcpToolServer = new MCPToolServer({ projectPath: null });
+const WebSearch = require(path.join(ROOT_DIR, 'webSearch'));
+const webSearch = new WebSearch();
+const mcpToolServer = new MCPToolServer({ projectPath: null, webSearch });
+
+// R33-Phase1: Wire mcpToolServer to the mainWindow bridge so it can emit
+// 'files-changed' and 'agent-file-modified' events to the frontend.
+// Without this, the File Explorer never auto-updates after file operations
+// because browserManager.parentWindow is null in web-server mode.
+mcpToolServer.setBrowserManager({ parentWindow: mainWindow });
+
+const gitManager = new GitManager();
+mcpToolServer.setGitManager(gitManager);
+
 const memoryStore = new MemoryStore();
 const longTermMemory = new LongTermMemory();
 const modelManager = new ModelManager(ROOT_DIR);
 const sessionStore = new SessionStore(path.join(USER_DATA, 'sessions'));
 const cloudLLM = new CloudLLMService();
 const modelDownloader = new ModelDownloader(path.join(ROOT_DIR, 'models'));
+const ragEngine = new RAGEngine();
+const browserManager = new BrowserManager({ liveServer, parentWindow: mainWindow });
 
-// Settings persistence
-const SETTINGS_PATH = path.join(USER_DATA, 'settings.json');
-function loadSettings() {
-  try {
-    if (fs.existsSync(SETTINGS_PATH)) {
-      return JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf8'));
-    }
-  } catch (_) {}
-  return { userSettings: {} };
-}
-function saveSettings(settings) {
-  try {
-    fs.mkdirSync(path.dirname(SETTINGS_PATH), { recursive: true });
-    fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2), 'utf8');
-  } catch (e) {
-    console.error('[Server] Failed to save settings:', e.message);
+// Settings persistence — SettingsManager handles settings.json + encrypted API keys
+const settingsManager = new SettingsManager(USER_DATA);
+
+// Restore persisted API keys into cloudLLM on startup
+const savedKeys = settingsManager.getAllApiKeys();
+for (const [provider, key] of Object.entries(savedKeys)) {
+  if (key && key.trim()) {
+    cloudLLM.setApiKey(provider, key);
+    console.log(`[Server] Restored API key for ${provider}`);
   }
 }
 
-let currentSettings = loadSettings();
+const firstRunSetup = new FirstRunSetup(settingsManager);
+
+// Auto-updater (fallback when not running in Electron)
+const autoUpdater = new AutoUpdater(mainWindow, { autoDownload: false });
+
+// Account/Auth manager
+const accountManager = new AccountManager(settingsManager);
+
+// License manager — validates licenses, handles Stripe checkout
+const licenseManager = new LicenseManager(settingsManager, accountManager);
+
+let currentSettings = settingsManager.getAll();
 
 // ─── Build context object (same shape agenticChat.register() expects) ──
 const ctx = {
@@ -174,21 +200,18 @@ const ctx = {
 
   cloudLLM,
 
-  // Browser stubs — Playwright/browser engine not included in core
+  // Browser — manages live preview + Playwright (if installed)
   playwrightBrowser: null,
-  browserManager: null,
+  browserManager,
 
-  // RAG stub — supplementary feature
-  ragEngine: null,
+  // RAG engine — BM25 codebase search
+  ragEngine,
 
-  // Web search stub — can be connected to DuckDuckGo or similar
-  webSearch: null,
+  // Web search — DuckDuckGo HTML scraping, no API key required
+  webSearch,
 
-  // License stub — local-first, no license required
-  licenseManager: {
-    isActivated: false,
-    getSessionToken: () => null,
-  },
+  // License/account — local-first, account optional for cloud features
+  licenseManager,
 
   _truncateResult: (result) => {
     if (!result) return result;
@@ -214,6 +237,12 @@ app.use(express.json({ limit: '50mb' }));
 const { register: registerTemplates } = require(path.join(__dirname, 'templateHandlers'));
 registerTemplates(app);
 
+// ─── Module Routes (firstRun, autoUpdater, account, license) ──
+firstRunSetup.registerRoutes(app);
+autoUpdater.registerRoutes(app);
+accountManager.registerRoutes(app);
+licenseManager.registerRoutes(app);
+
 // ─── REST API Routes ─────────────────────────────────────
 
 // Model management
@@ -235,6 +264,8 @@ app.post('/api/models/load', async (req, res) => {
     mainWindow.webContents.send('model-loading', { path: modelPath });
     await llmEngine.initialize(modelPath);
     const info = llmEngine.modelInfo;
+    // Persist last-used model so it auto-loads on next startup
+    settingsManager.set('lastModelPath', modelPath);
     mainWindow.webContents.send('model-loaded', info);
     res.json({ success: true, modelInfo: info });
   } catch (e) {
@@ -309,8 +340,11 @@ app.post('/api/project/open', (req, res) => {
     if (!fs.existsSync(resolved)) return res.status(404).json({ error: 'Directory not found' });
     ctx.currentProjectPath = resolved;
     mcpToolServer.projectPath = resolved;
+    gitManager.setProjectPath(resolved);
     memoryStore.initialize(resolved);
     longTermMemory.initialize(resolved);
+    // Index project for RAG search (async, non-blocking)
+    ragEngine.indexProject(resolved).catch(e => console.warn('[Server] RAG indexing failed:', e.message));
     mainWindow.webContents.send('project-opened', { path: resolved });
     res.json({ success: true, path: resolved });
   } catch (e) {
@@ -362,12 +396,12 @@ app.post('/api/files/write', async (req, res) => {
 
 // Settings
 app.get('/api/settings', (req, res) => {
-  res.json(currentSettings);
+  res.json(settingsManager.getAll());
 });
 
 app.post('/api/settings', (req, res) => {
-  currentSettings = { ...currentSettings, ...req.body };
-  saveSettings(currentSettings);
+  settingsManager.setAll(req.body);
+  currentSettings = settingsManager.getAll();
   res.json({ success: true });
 });
 
@@ -413,6 +447,8 @@ app.post('/api/cloud/apikey', (req, res) => {
   const { provider, key } = req.body;
   if (!provider) return res.status(400).json({ error: 'provider required' });
   cloudLLM.setApiKey(provider, key || '');
+  // Persist the key (encrypted) so it survives restarts
+  settingsManager.setApiKey(provider, key || '');
   res.json({ success: true, hasKey: !!(key && key.trim()) });
 });
 
@@ -522,41 +558,28 @@ app.get('/api/license/status', (req, res) => {
   const lm = ctx.licenseManager;
   res.json({
     isActivated: lm.isActivated || false,
-    isAuthenticated: lm.isAuthenticated || false,
+    isAuthenticated: accountManager.isAuthenticated || false,
     license: lm.licenseData || null,
     machineId: lm.machineId || null,
+    user: accountManager.user || null,
+    plan: lm.getPlan(),
   });
 });
 
-app.post('/api/license/activate', (req, res) => {
-  const { method, key, email, password } = req.body || {};
-  if (method === 'key') {
-    // License key activation — stub for now
-    if (!key || !key.trim()) return res.json({ success: false, error: 'License key is required' });
-    res.json({ success: false, error: 'License server not yet connected. Use local AI for now.' });
-  } else if (method === 'account') {
-    // Email/password activation — stub for now
-    if (!email || !password) return res.json({ success: false, error: 'Email and password are required' });
-    res.json({ success: false, error: 'License server not yet connected. Use local AI for now.' });
-  } else {
-    res.json({ success: false, error: 'Invalid activation method' });
-  }
-});
+// POST /api/license/activate — handled by licenseManager.registerRoutes()
 
-app.post('/api/license/oauth', (req, res) => {
+app.post('/api/license/oauth', async (req, res) => {
   const { provider } = req.body || {};
   if (!provider || !['google', 'github'].includes(provider)) {
     return res.json({ success: false, error: 'Invalid OAuth provider' });
   }
-  // OAuth flow — stub for now
-  res.json({ success: false, error: 'OAuth not yet available. Use local AI for now.' });
+  const { url } = accountManager.getOAuthURL(provider);
+  res.json({ success: true, url });
 });
 
 app.post('/api/license/deactivate', (req, res) => {
-  // Deactivation — stub: reset in-memory state
-  ctx.licenseManager.isActivated = false;
-  ctx.licenseManager.isAuthenticated = false;
-  ctx.licenseManager.licenseData = null;
+  licenseManager.deactivate();
+  accountManager.logout();
   res.json({ success: true });
 });
 
@@ -634,25 +657,8 @@ app.get('/api/git/status', async (req, res) => {
   const basePath = req.query.path || ctx.currentProjectPath;
   if (!basePath) return res.json({ error: 'No project path' });
   try {
-    const { execSync } = require('child_process');
-    const opts = { cwd: basePath, encoding: 'utf8', timeout: 5000 };
-    let branch = '';
-    try { branch = execSync('git rev-parse --abbrev-ref HEAD', opts).trim(); } catch (_) {}
-    if (!branch) return res.json({ error: 'Not a git repository', branch: '', staged: [], modified: [], untracked: [] });
-    let statusOutput = '';
-    try { statusOutput = execSync('git status --porcelain', opts); } catch (_) {}
-    const staged = [];
-    const modified = [];
-    const untracked = [];
-    for (const line of statusOutput.split('\n')) {
-      if (!line.trim()) continue;
-      const x = line[0], y = line[1];
-      const file = line.substring(3).trim();
-      if (x === '?' && y === '?') untracked.push(file);
-      else if (x !== ' ' && x !== '?') staged.push(file);
-      if (y !== ' ' && y !== '?') modified.push(file);
-    }
-    res.json({ branch, staged, modified, untracked });
+    const result = gitManager.getStatus(basePath);
+    res.json(result);
   } catch (e) {
     res.json({ error: e.message, branch: '', staged: [], modified: [], untracked: [] });
   }
@@ -663,15 +669,10 @@ app.post('/api/git/stage', async (req, res) => {
   const basePath = req.body.path || ctx.currentProjectPath;
   if (!basePath) return res.status(400).json({ error: 'No project path' });
   try {
-    const { execSync } = require('child_process');
-    const opts = { cwd: basePath, encoding: 'utf8', timeout: 10000 };
     if (req.body.all) {
-      execSync('git add -A', opts);
+      gitManager.stageAll(basePath);
     } else if (req.body.files && Array.isArray(req.body.files)) {
-      for (const f of req.body.files) {
-        const safe = f.replace(/"/g, '\\"');
-        execSync(`git add "${safe}"`, opts);
-      }
+      gitManager.stageFiles(req.body.files, basePath);
     } else {
       return res.status(400).json({ error: 'Provide files array or all:true' });
     }
@@ -686,15 +687,10 @@ app.post('/api/git/unstage', async (req, res) => {
   const basePath = req.body.path || ctx.currentProjectPath;
   if (!basePath) return res.status(400).json({ error: 'No project path' });
   try {
-    const { execSync } = require('child_process');
-    const opts = { cwd: basePath, encoding: 'utf8', timeout: 10000 };
     if (req.body.all) {
-      execSync('git reset HEAD', opts);
+      gitManager.unstageAll(basePath);
     } else if (req.body.files && Array.isArray(req.body.files)) {
-      for (const f of req.body.files) {
-        const safe = f.replace(/"/g, '\\"');
-        execSync(`git reset HEAD "${safe}"`, opts);
-      }
+      gitManager.unstageFiles(req.body.files, basePath);
     } else {
       return res.status(400).json({ error: 'Provide files array or all:true' });
     }
@@ -711,11 +707,8 @@ app.post('/api/git/commit', async (req, res) => {
   if (!basePath) return res.status(400).json({ error: 'No project path' });
   if (!message || !message.trim()) return res.status(400).json({ error: 'Commit message required' });
   try {
-    const { execSync } = require('child_process');
-    const opts = { cwd: basePath, encoding: 'utf8', timeout: 15000 };
-    const safe = message.trim().replace(/"/g, '\\"');
-    const result = execSync(`git commit -m "${safe}"`, opts);
-    res.json({ success: true, output: result });
+    const result = gitManager.commit(message, basePath);
+    res.json(result);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -726,13 +719,8 @@ app.post('/api/git/discard', async (req, res) => {
   const basePath = req.body.path || ctx.currentProjectPath;
   if (!basePath) return res.status(400).json({ error: 'No project path' });
   try {
-    const { execSync } = require('child_process');
-    const opts = { cwd: basePath, encoding: 'utf8', timeout: 10000 };
     if (req.body.files && Array.isArray(req.body.files)) {
-      for (const f of req.body.files) {
-        const safe = f.replace(/"/g, '\\"');
-        execSync(`git checkout -- "${safe}"`, opts);
-      }
+      gitManager.discardFiles(req.body.files, basePath);
     } else {
       return res.status(400).json({ error: 'Provide files array' });
     }
@@ -747,15 +735,8 @@ app.get('/api/git/diff', async (req, res) => {
   const basePath = req.query.path || ctx.currentProjectPath;
   if (!basePath) return res.status(400).json({ error: 'No project path' });
   try {
-    const { execSync } = require('child_process');
-    const opts = { cwd: basePath, encoding: 'utf8', timeout: 10000 };
-    let cmd = req.query.staged === 'true' ? 'git diff --cached' : 'git diff';
-    if (req.query.file) {
-      const safe = req.query.file.replace(/"/g, '\\"');
-      cmd += ` -- "${safe}"`;
-    }
-    const diff = execSync(cmd, opts);
-    res.json({ success: true, diff });
+    const result = gitManager.getDiff({ staged: req.query.staged === 'true', file: req.query.file }, basePath);
+    res.json(result);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -766,15 +747,9 @@ app.get('/api/git/log', async (req, res) => {
   const basePath = req.query.path || ctx.currentProjectPath;
   if (!basePath) return res.status(400).json({ error: 'No project path' });
   try {
-    const { execSync } = require('child_process');
-    const count = Math.min(100, Math.max(1, parseInt(req.query.count) || 20));
-    const opts = { cwd: basePath, encoding: 'utf8', timeout: 10000 };
-    const result = execSync(`git log --oneline --format="%h|%s|%an|%ar" -${count}`, opts);
-    const entries = result.split('\n').filter(Boolean).map(line => {
-      const [hash, message, author, date] = line.split('|');
-      return { hash, message, author, date };
-    });
-    res.json({ success: true, entries });
+    const count = parseInt(req.query.count) || 20;
+    const result = gitManager.getLog(count, basePath);
+    res.json(result);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -785,14 +760,8 @@ app.get('/api/git/branches', async (req, res) => {
   const basePath = req.query.path || ctx.currentProjectPath;
   if (!basePath) return res.status(400).json({ error: 'No project path' });
   try {
-    const { execSync } = require('child_process');
-    const opts = { cwd: basePath, encoding: 'utf8', timeout: 5000 };
-    const result = execSync('git branch', opts);
-    const branches = result.split('\n').filter(Boolean).map(line => ({
-      name: line.replace(/^\*?\s*/, '').trim(),
-      current: line.startsWith('*'),
-    }));
-    res.json({ success: true, branches });
+    const result = gitManager.getBranches(basePath);
+    res.json(result);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -805,15 +774,42 @@ app.post('/api/git/checkout', async (req, res) => {
   if (!basePath) return res.status(400).json({ error: 'No project path' });
   if (!branch) return res.status(400).json({ error: 'Branch name required' });
   try {
-    const { execSync } = require('child_process');
-    const opts = { cwd: basePath, encoding: 'utf8', timeout: 15000 };
-    const safe = branch.replace(/"/g, '\\"');
-    const create = req.body.create ? '-b ' : '';
-    const result = execSync(`git checkout ${create}"${safe}"`, opts);
-    res.json({ success: true, output: result });
+    const result = gitManager.checkout(branch, { create: !!req.body.create }, basePath);
+    res.json(result);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// ─── Browser Preview Routes ─────────────────────────────
+
+app.post('/api/preview/start', async (req, res) => {
+  const rootPath = req.body.rootPath || ctx.currentProjectPath;
+  if (!rootPath) return res.status(400).json({ error: 'No project path' });
+  try {
+    const result = await browserManager.startPreview(rootPath);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/preview/stop', async (req, res) => {
+  try {
+    const result = await browserManager.stopPreview();
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/preview/reload', (req, res) => {
+  browserManager.reloadPreview();
+  res.json({ success: true });
+});
+
+app.get('/api/preview/status', (req, res) => {
+  res.json(browserManager.getPreviewStatus());
 });
 
 // File create (for SearchPanel/explorer new file)
@@ -1013,12 +1009,14 @@ ptyWss.on('connection', (ws) => {
 modelManager.initialize().then((models) => {
   console.log(`[Server] Found ${models.length} model(s)`);
 
-  // Auto-load default model if none is loaded
+  // Auto-load: prefer last-used model, then fall back to default heuristic
   if (!llmEngine.isReady && models.length > 0) {
-    const defaultModel = modelManager.getDefaultModel();
-    if (defaultModel) {
-      console.log(`[Server] Auto-loading default model: ${defaultModel.name}`);
-      llmEngine.initialize(defaultModel.path).catch(e => {
+    const lastPath = settingsManager.get('lastModelPath');
+    const lastModel = lastPath && models.find(m => m.path === lastPath);
+    const target = lastModel || modelManager.getDefaultModel();
+    if (target) {
+      console.log(`[Server] Auto-loading ${lastModel ? 'last-used' : 'default'} model: ${target.name}`);
+      llmEngine.initialize(target.path).catch(e => {
         console.error(`[Server] Auto-load failed: ${e.message}`);
       });
     }
@@ -1062,8 +1060,10 @@ server.listen(PORT, () => {
 process.on('SIGINT', async () => {
   console.log('\n[Server] Shutting down...');
   transport.shutdown();
+  settingsManager.flush();
   memoryStore.dispose();
   sessionStore.flush();
+  try { await browserManager.dispose(); } catch (_) {}
   try { await llmEngine.dispose(); } catch (_) {}
   modelManager.dispose();
   log.close();

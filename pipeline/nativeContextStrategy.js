@@ -14,6 +14,7 @@
  */
 
 const log = require('../logger');
+const { matchFilePathInText, matchContentValueInText } = require('./regexHelpers');
 
 const CONFIG = {
   // Conservative chars-per-token estimate for budget calculations.
@@ -104,13 +105,48 @@ function truncateModelItem(item, maxChars) {
   // If any string segment looks like a partial tool call JSON, keep only the
   // text segments that appear BEFORE the first JSON segment. This prevents
   // the model from seeing its own mid-JSON output as a continuation anchor.
-  const firstJsonSegIdx = item.response.findIndex(seg => {
+  //
+  // R30-Fix: Also detect tool call JSON that appears MID-SEGMENT (not just at start).
+  // When the model outputs prose intro + JSON in the same string segment (e.g.,
+  // "I'll create a complete periodic table...\n\n```json\n{"tool":"write_file",...}"),
+  // startsWith fails because the segment starts with prose. We use indexOf/regex
+  // to find JSON anywhere in the segment and split it: prose prefix goes to
+  // prefixSegs, JSON portion goes to T42-Fix for file content extraction.
+  let firstJsonSegIdx = item.response.findIndex(seg => {
     if (typeof seg !== 'string') return false;
     const trimmed = seg.trimStart();
     return trimmed.startsWith('{"tool"') || trimmed.startsWith('{"tool_calls"') ||
            trimmed.startsWith('{"function"') || trimmed.startsWith('{"name"') ||
            trimmed.startsWith('```json\n{"tool') || trimmed.startsWith('```json\n{"function');
   });
+
+  // R30-Fix: If startsWith didn't match, search for embedded tool call JSON
+  // within string segments. This handles the common case where the model outputs
+  // prose intro text before the JSON tool call in the same response segment.
+  let embeddedJsonSplitPos = -1;
+  if (firstJsonSegIdx < 0) {
+    for (let si = 0; si < item.response.length; si++) {
+      const seg = item.response[si];
+      if (typeof seg !== 'string') continue;
+      // Look for tool call JSON pattern anywhere in the segment
+      const jsonMatch = seg.match(/\{"tool"\s*:\s*"(write_file|create_file|append_to_file|edit_file)"/);
+      if (jsonMatch) {
+        // Also check for fenced variant: ```json\n{"tool"...
+        const fencedMatch = seg.match(/```(?:json|tool)?\s*\n\s*\{"tool"\s*:\s*"(write_file|create_file|append_to_file|edit_file)"/);
+        const splitAt = fencedMatch ? seg.indexOf(fencedMatch[0]) : jsonMatch.index;
+        if (splitAt > 0) {
+          // JSON is embedded mid-segment — split the segment
+          embeddedJsonSplitPos = splitAt;
+          firstJsonSegIdx = si;
+          if (CONFIG.DEBUG) log.info(`[NativeCtxShift] R30-Fix: Found embedded tool call JSON at char ${splitAt} in segment ${si} (${seg.length} chars total)`);
+        } else {
+          // JSON is at position 0 — treat as if startsWith matched
+          firstJsonSegIdx = si;
+        }
+        break;
+      }
+    }
+  }
 
   if (firstJsonSegIdx >= 0) {
     // ── T42-Fix: Instead of dropping the tool call JSON entirely (which erased
@@ -119,13 +155,22 @@ function truncateModelItem(item, maxChars) {
     // summary. The model retains awareness of what it was writing — file path,
     // line count, and the tail of the content — without the confusing partial
     // JSON structure that caused R13-Fix-D1's stalls/EOS issues.
-    const prefixSegs = firstJsonSegIdx > 0 ? item.response.slice(0, firstJsonSegIdx) : [];
-    const jsonSeg = item.response[firstJsonSegIdx];
+    let prefixSegs = firstJsonSegIdx > 0 ? item.response.slice(0, firstJsonSegIdx) : [];
+    let jsonSeg = item.response[firstJsonSegIdx];
+
+    // R30-Fix: When the tool call JSON was embedded mid-segment, split the segment.
+    // The prose before the JSON becomes an additional prefix segment.
+    if (embeddedJsonSplitPos > 0 && typeof jsonSeg === 'string') {
+      const prosePart = jsonSeg.slice(0, embeddedJsonSplitPos);
+      jsonSeg = jsonSeg.slice(embeddedJsonSplitPos);
+      prefixSegs = [...prefixSegs, prosePart];
+      if (CONFIG.DEBUG) log.info(`[NativeCtxShift] R30-Fix: Split segment — prose prefix ${prosePart.length} chars, JSON portion ${jsonSeg.length} chars`);
+    }
 
     let fileSummary = '';
     if (typeof jsonSeg === 'string') {
-      const fpMatch = jsonSeg.match(/"(?:filePath|file_path|path|filename|file_name|file)"\s*:\s*"([^"]+)"/);
-      const contentMatch = jsonSeg.match(/"content"\s*:\s*"([\s\S]*)/);
+      const fpMatch = matchFilePathInText(jsonSeg);
+      const contentMatch = matchContentValueInText(jsonSeg);
       if (fpMatch && contentMatch) {
         const rawContent = contentMatch[1];
         // Unescape JSON string to get actual file content
@@ -141,13 +186,17 @@ function truncateModelItem(item, maxChars) {
         let prefixChars = 0;
         for (const s of prefixSegs) prefixChars += typeof s === 'string' ? s.length : JSON.stringify(s).length;
         const descriptionOverhead = 300; // conservative estimate for the "[I was writing..." header text
-        const availableForTail = Math.max(600, maxChars - prefixChars - descriptionOverhead);
+        const headBudget = 200; // R32-Fix Phase C: budget for file head (first few lines)
+        const head = content.split('\n').slice(0, 5).join('\n');
+        const headText = head.length > headBudget ? head.slice(0, headBudget) : head;
+        const availableForTail = Math.max(600, maxChars - prefixChars - descriptionOverhead - headText.length - 30);
         const tail = content.slice(-availableForTail);
         fileSummary = `\n[I was writing "${fpMatch[1]}" with write_file — ${lineCount} lines written so far. ` +
           `The file is INCOMPLETE. I must continue from where I left off using append_to_file. ` +
           `Do NOT restart the file. Do NOT use write_file.\n` +
+          `File starts with:\n${headText}\n...\n` +
           `Last content written:\n${tail}]`;
-        if (CONFIG.DEBUG) log.info(`[NativeCtxShift] T42-Fix/R28-2: Preserved file content summary for "${fpMatch[1]}" (${lineCount} lines, ${tail.length}-char tail, budget=${maxChars}, available=${availableForTail})`);
+        if (CONFIG.DEBUG) log.info(`[NativeCtxShift] T42-Fix/R28-2/R32-C: Preserved file content summary for "${fpMatch[1]}" (${lineCount} lines, head=${headText.length} chars, tail=${tail.length} chars, budget=${maxChars}, available=${availableForTail})`);
       }
     }
 
@@ -216,19 +265,32 @@ function truncateModelItemSegments(segments, maxChars) {
 /**
  * Generate a concise summary of dropped history items.
  * Zero-LLM-cost: extracts key user requests and model actions.
+ * R39-B4: Budget-proportional user message preservation — keeps proportional text
+ * from ALL dropped user messages instead of just the first sentence.
  */
 function summarizeDroppedItems(items) {
   if (!items || items.length === 0) return '';
   const parts = [];
 
+  // Count user messages to calculate per-message budget
+  const userMessages = items.filter(i => i.type === 'user' && i.text);
+  const totalBudgetChars = 3000; // total chars available for user message summaries
+  const perMessageBudget = userMessages.length > 0
+    ? Math.max(100, Math.min(600, Math.floor(totalBudgetChars / userMessages.length)))
+    : 200;
+
   for (const item of items) {
     if (item.type === 'user' && item.text) {
-      const text = (typeof item.text === 'string' ? item.text : '').slice(0, 200);
-      // Extract the first sentence as the user's request
-      const firstSentence = text.split(/[.!?\n]/)[0].trim();
-      if (firstSentence.length > 10) {
-        parts.push(`User: ${firstSentence}`);
+      const text = (typeof item.text === 'string' ? item.text : '').trim();
+      if (text.length <= 10) continue;
+      // Keep up to perMessageBudget chars, truncating at word boundary
+      let kept = text.slice(0, perMessageBudget);
+      if (kept.length < text.length) {
+        const lastSpace = kept.lastIndexOf(' ');
+        if (lastSpace > perMessageBudget * 0.5) kept = kept.slice(0, lastSpace);
+        kept += '...';
       }
+      parts.push(`User: ${kept}`);
     } else if (item.type === 'model' && item.response) {
       const toolCalls = item.response.filter(r => r && r.type === 'functionCall');
       for (const call of toolCalls) {
@@ -281,22 +343,35 @@ function extractFileProgress(chatHistory) {
 
 /**
  * Detect if the model is currently in the middle of writing a file.
- * Looks at the LAST item in history — if it's a model response with an
- * in-progress write_file tool call, we're mid-file-generation.
+ * R30-Fix: Scans backwards through ALL model items in history, not just the
+ * last item. When the agentic loop injects a continuation message (user type)
+ * after a file write iteration, the last item is that user message — not the
+ * model response containing write_file. Checking only the last item returns
+ * null, causing the entire file-aware budget/summary path to be skipped.
+ * Now scans backwards and checks the most recent model response found.
  */
 function detectActiveFileGeneration(chatHistory) {
-  const last = chatHistory[chatHistory.length - 1];
-  if (!last || last.type !== 'model' || !last.response) return null;
+  // R30-Fix: Walk backwards to find the most recent model response
+  for (let i = chatHistory.length - 1; i >= 0; i--) {
+    const item = chatHistory[i];
+    if (item.type !== 'model' || !item.response) continue;
 
-  for (const seg of last.response) {
-    if (typeof seg === 'string') {
-      // Look for partial tool call JSON in the response text
-      const writeMatch = seg.match(/"tool"\s*:\s*"write_file".*?"filePath"\s*:\s*"([^"]+)"/s);
-      if (writeMatch) return { filePath: writeMatch[1], isPartial: true };
+    for (const seg of item.response) {
+      if (typeof seg === 'string') {
+        // Look for partial tool call JSON in the response text
+        const writeMatch = seg.match(/"tool"\s*:\s*"write_file".*?"filePath"\s*:\s*"([^"]+)"/s);
+        if (writeMatch) return { filePath: writeMatch[1], isPartial: true };
+        // R30-Fix: Also detect the T42-Fix condensed summary format
+        // e.g. '[I was writing "periodic-table.html" with write_file — 432 lines'
+        const summaryMatch = seg.match(/\[I was writing "([^"]+)" with write_file/);
+        if (summaryMatch) return { filePath: summaryMatch[1], isPartial: true };
+      }
+      if (seg && seg.type === 'functionCall' && seg.name === 'write_file') {
+        return { filePath: seg.params?.filePath, isPartial: false };
+      }
     }
-    if (seg && seg.type === 'functionCall' && seg.name === 'write_file') {
-      return { filePath: seg.params?.filePath, isPartial: false };
-    }
+    // Only check the most recent model response — don't go further back
+    break;
   }
   return null;
 }

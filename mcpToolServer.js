@@ -1376,6 +1376,15 @@ class MCPToolServer {
       if (typeof content === 'string' && !content.includes('\n') && content.includes('\\n')) {
         content = content.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\r/g, '\r');
       }
+      // R38-Fix-C: Strip stray character before <!DOCTYPE in HTML files.
+      // LLM JSON encoding can produce a leading "/" (from \/ escape) or other
+      // single stray character before <!DOCTYPE. No valid HTML starts this way.
+      if (typeof content === 'string') {
+        const htmlExt = fullPath.match(/\.(html?|xhtml)$/i);
+        if (htmlExt) {
+          content = content.replace(/^[^<\s](<!\s*DOCTYPE)/i, '$1');
+        }
+      }
       await fs.writeFile(fullPath, content, 'utf8');
 
       if (this.browserManager?.parentWindow) {

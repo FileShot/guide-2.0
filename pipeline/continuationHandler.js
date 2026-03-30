@@ -12,6 +12,8 @@
  */
 'use strict';
 
+const { matchContentValueInText } = require('./regexHelpers');
+
 /**
  * Determine if a generation result was truncated and should be continued.
  */
@@ -49,7 +51,7 @@ function continuationMessage(taskContext) {
       : 'Continue the tool call from exactly where you stopped.';
 
     if (taskContext.accumulatedBuffer) {
-      const contentMatch = taskContext.accumulatedBuffer.match(/"content"\s*:\s*"([\s\S]*)/);
+      const contentMatch = matchContentValueInText(taskContext.accumulatedBuffer);
       const fileContent = contentMatch ? contentMatch[1] : taskContext.accumulatedBuffer;
       const lineCount = (fileContent.match(/\n/g) || []).length + 1;
 

@@ -4,15 +4,17 @@
  * Receives pre-highlighted HTML from rehype-highlight (via MarkdownRenderer).
  */
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { Copy, Check, FileDown, WrapText, Download, Hash, ChevronDown, ChevronRight } from 'lucide-react';
+import { Copy, Check, FileDown, WrapText, Download, Hash, ChevronDown, ChevronRight, Play, Code } from 'lucide-react';
 
 const COLLAPSE_LINE_THRESHOLD = 10;
+const RENDERABLE_LANGUAGES = new Set(['html', 'css', 'javascript', 'js', 'jsx', 'svg', 'xml']);
 
 export default function CodeBlock({ language, children, className }) {
   const [copied, setCopied] = useState(false);
   const [showLineNumbers, setShowLineNumbers] = useState(false);
   const [wordWrap, setWordWrap] = useState(false);
   const [collapsed, setCollapsed] = useState(true);
+  const [rendering, setRendering] = useState(false);
   const codeRef = useRef(null);
 
   // Extract text content from children (may be React elements from rehype-highlight)
@@ -105,6 +107,16 @@ export default function CodeBlock({ language, children, className }) {
 
   // Normalize language display
   const langDisplay = (language || '').replace(/^language-/, '');
+  const isRenderable = RENDERABLE_LANGUAGES.has(langDisplay.toLowerCase());
+
+  const buildSrcdoc = useCallback(() => {
+    const text = getTextContent();
+    const lang = langDisplay.toLowerCase();
+    if (lang === 'html' || lang === 'xml' || lang === 'svg') return text;
+    if (lang === 'css') return `<!DOCTYPE html><html><head><style>${text}</style></head><body><div class="preview">CSS Preview</div></body></html>`;
+    if (lang === 'javascript' || lang === 'js' || lang === 'jsx') return `<!DOCTYPE html><html><head></head><body><script>${text}<\/script></body></html>`;
+    return text;
+  }, [getTextContent, langDisplay]);
 
   return (
     <div className="code-block-container group relative my-2 rounded-md overflow-hidden border border-vsc-panel-border/40">
@@ -114,6 +126,18 @@ export default function CodeBlock({ language, children, className }) {
           {langDisplay || 'text'}{lineCount > 0 && ` (${lineCount} lines)`}
         </span>
         <div className="flex items-center gap-0.5">
+          {/* Play/render toggle (renderable languages only) */}
+          {isRenderable && (
+            <button
+              className={`p-1 rounded-sm transition-colors ${
+                rendering ? 'text-vsc-success bg-vsc-success/10' : 'text-vsc-text-dim hover:text-vsc-text hover:bg-vsc-list-hover'
+              }`}
+              onClick={() => setRendering(!rendering)}
+              title={rendering ? 'Show code' : 'Render preview'}
+            >
+              {rendering ? <Code size={13} /> : <Play size={13} />}
+            </button>
+          )}
           {/* Word wrap toggle */}
           <button
             className={`p-1 rounded-sm transition-colors ${
@@ -163,7 +187,28 @@ export default function CodeBlock({ language, children, className }) {
         </div>
       </div>
 
-      {/* Code content */}
+      {/* Code content or rendered preview */}
+      {rendering ? (
+        <div className="relative bg-white">
+          <iframe
+            srcDoc={buildSrcdoc()}
+            className="w-full border-0"
+            style={{ minHeight: '200px', maxHeight: '500px' }}
+            sandbox="allow-scripts"
+            title="Code preview"
+            onLoad={(e) => {
+              // Auto-resize iframe to fit content
+              try {
+                const doc = e.target.contentDocument;
+                if (doc?.body) {
+                  const h = Math.min(Math.max(doc.body.scrollHeight + 20, 200), 500);
+                  e.target.style.height = h + 'px';
+                }
+              } catch (_) {}
+            }}
+          />
+        </div>
+      ) : (
       <div className="relative">
         <div className={`overflow-x-auto ${wordWrap ? 'code-wrap' : ''} ${isCollapsed ? 'max-h-[240px] overflow-y-hidden' : 'max-h-[500px] overflow-y-auto'}`}>
           <pre className="!m-0 !rounded-none !border-0 p-3 text-vsc-sm leading-relaxed bg-vsc-bg">
@@ -203,6 +248,7 @@ export default function CodeBlock({ language, children, className }) {
           </button>
         )}
       </div>
+      )}
     </div>
   );
 }

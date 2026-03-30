@@ -4,6 +4,1077 @@
 
 ---
 
+## 2026-03-31 — R39: All 9 Defect Fixes + Visual Polish (10 files)
+
+### Phase A: Frontend UI Fixes
+
+#### A1. Tool Call Display (3 files)
+- **appStore.js ~L123:** Added `streamingToolCalls: []` state for live tool call tracking.
+- **appStore.js ~L193:** Added `addStreamingToolCall(tc)` and `updateStreamingToolCall(name, updates)` actions.
+- **appStore.js ~L153:** Added `streamingToolCalls: []` to `setChatStreaming(false)` cleanup object.
+- **App.jsx L73-78:** Populated empty `tool-executing`, `mcp-tool-results`, `tool-checkpoint` handlers. `tool-executing` calls `addStreamingToolCall()` with functionName, params, status, startTime. `mcp-tool-results` calls `updateStreamingToolCall()` with status/result/duration. `tool-checkpoint` merges checkpoint data.
+- **ChatPanel.jsx ~L42:** Added `streamingToolCalls` state selector.
+- **ChatPanel.jsx Footer:** Renders `streamingToolCalls.map(tc => <ToolCallCard>)` after generating tool spinner, before segments.
+- **ChatPanel.jsx finalization ~L231:** Copies `streamingToolCalls` into `toolCalls` property of finalized assistant message.
+- **Why:** ToolCallCard.jsx existed but was never fed data. Backend emitted events, App.jsx stubs were empty.
+
+#### A2. Chat Auto-Scroll (1 file)
+- **ChatPanel.jsx:** Added `virtuosoRef` ref and `atBottomRef` ref. Added `ref={virtuosoRef}` and `atBottomStateChange` callback to Virtuoso. Added useEffect watching `[chatStreaming, chatStreamingText, streamingSegments, streamingToolCalls]` — calls `scrollToIndex({index:'LAST', behavior:'smooth'})` when `atBottomRef.current` is true.
+- **Why:** Virtuoso `followOutput` only fires when `data` array grows. Streaming renders in Footer — not a data item. Footer growth never triggered follow.
+
+#### A3. Terminal Theme Sync (1 file)
+- **BottomPanel.jsx XTermPanel:** Added second useEffect with MutationObserver on `document.documentElement`, watching `attributes: ['class']`. On mutation, re-reads CSS vars via `getComputedStyle` and updates `xtermRef.current.options.theme`.
+- **Why:** xterm read CSS vars once on mount with deps `[activeTerminalTab]`. Theme changes never triggered re-read.
+
+#### A4. Welcome Screen Overflow (1 file)
+- **WelcomeScreen.jsx:** Changed `recentFolders.map()` to `recentFolders.slice(0, 4).map()` with "Show all (N)" link.
+- SVG heights: 40%→25%, 35%→20%. Opacity: 0.06→0.03, 0.04→0.02. Animation: "30,5"→"15,3", "-20,8"→"-10,4".
+- **Why:** Unlimited recent projects caused vertical overflow. Aggressive SVG animation was distracting.
+
+### Phase B: Pipeline Fixes
+
+#### B1. Narrative Stripping in Fix-M (1 file)
+- **agenticLoop.js Fix-M path (~L2215):** After fence stripping and before append, added syntax-character-based prose detection. Uses file extension to determine syntax test regex (HTML: `<`, CSS: `{:;@`, JS: `=({;` + keywords, Python: `=({:` + keywords, JSON: `[{`, YAML: `:`). Scans first 15 lines, skips everything before first syntax-matching line.
+- **Why:** After context shift, model outputs prose preamble ("I'll continue building...") that got appended to the file, corrupting CSS/HTML.
+
+#### B2. Post-Shift Continuation Directive (1 file)
+- **agenticLoop.js ~L258:** Added `let lastContextPercent = 100` tracking variable.
+- **agenticLoop.js ~L520:** After `stream.contextUsage()`, computes `currentContextPercent`. If `current < last * 0.6` AND `rotationCheckpoint` active, injects strong continuation directive as `nextUserMessage`: "CONTEXT SHIFT OCCURRED. You were writing [file] ([N] lines). DO NOT restart. Continue from where you left off using append_to_file. Last content was: [tail 20 lines]. Output ONLY code."
+- **Why:** After context shift, model saw compressed summary and restarted task from scratch instead of continuing.
+
+#### B3. Fix-C Retry Improvement (1 file)
+- **agenticLoop.js R38-Fix-C block (~L2290):** Enhanced continuation message with structural analysis. For HTML files, reports missing structural elements (e.g., "Missing elements: `<body>`, `</body>`, `<script>`, `</html>`"). Added "no preamble" directive.
+- **Why:** Generic retry message caused model to output prose instead of code. Structural hints help model produce targeted code.
+
+#### B4. Budget-Proportional User Message Preservation (1 file)
+- **nativeContextStrategy.js `summarizeDroppedItems()`:** Replaced first-sentence extraction (`text.split(/[.!?\n]/)[0]`) with budget-proportional preservation. Counts dropped user messages, calculates `perMessageBudget = Math.max(100, Math.min(600, 3000/count))`. Keeps first N chars of each user message truncated at word boundary.
+- **Why:** First-sentence-only lost names, multi-part requests, conversation context. Budget-proportional keeps everything the user said proportionally — no pattern matching, no heuristics.
+
+### Phase C: Visual Polish (2 files)
+- **index.css:** Glass card: enhanced blur (12→16px), saturate (130→140%), added box-shadow depth. Chat messages: subtle border-bottom separators. Chat code blocks: rounded-lg, inset shadow, border. Editor tabs: inset shadow on active. File tree items: border-radius 3px, margins, active inset shadow. Command palette: rounded-xl, enhanced shadow. Notification toast: rounded-xl, blur (16→20px), enhanced shadow.
+- **ToolCallCard.jsx:** Added subtle box-shadow to card container.
+- **Why:** User requested VS Code-level polish — depth, shadows, glassy elements, rounded edges.
+
+---
+
+## 2026-03-30 — R38 TEST RESULTS (no code changes)
+
+### Test Environment
+- Model: Qwen3.5-2B-Q8_0.gguf, ctx=8192, TEST_MAX_CONTEXT=8000
+- GPU: RTX 3050 Ti Laptop (4096MB), 25/32 layers offloaded
+- 5 messages sent, 9 iterations across responses
+
+### Conversational Tests (Messages 1-4)
+- **Tool calling works**: web_search called correctly for weather, results integrated
+- **StreamHandler tool hold works**: properly held fenced JSON, finalized on real tool call
+- **Math computation correct**: 287 x 43 = 12,341
+- **Name recall FAILED**: model forgot "Brendano" by message 4 (told in message 1, used in response 1)
+- **Multi-item coverage**: model consistently skipped some items (Ravencoin search, programming languages question)
+- **Hallucination**: Maine fun fact completely fabricated (Lake Champlain in Maine, extinct volcano in Acadia)
+- **UI auto-scroll broken**: responses 3 and 4 not visible without manual scroll/click
+
+### Periodic Table Stress Test (Message 5 — Context Rotation)
+- Iterations 1-7: CSS generated via content-streaming, accumulated 6924 chars (237 lines)
+- R38-Fix-C exhausted 5/5 structural completion retries (file never reached HTML body)
+- **Context shift triggered at iteration 8** (62.5%, 5116/8192 tokens)
+- **After shift: model RESTARTED task** — "I need to create the complete HTML file..." — produced 2186 chars from scratch
+- **Rotation protection WORKED**: detected new<existing (2186<6924), blocked regression
+- File on disk: 6924 bytes, CSS only, no HTML body/JS/data, corrupted at boundaries
+- Corruption: narrative text leaked into CSS ("rgbaI'll continue building the periodic table...")
+
+### Scored (8 criteria from RULES.md)
+1. Context shifts at least once: PASS
+2. File COMPLETES with closing tags: FAIL
+3. ONE coherent code block in UI: PARTIAL
+4. Content coherent across context shifts: FAIL
+5. Line count grows monotonically: PASS (rotation protection)
+6. No duplicate content at boundaries: FAIL (narrative leak)
+7. No raw JSON leaking: PASS
+8. No "undefined" or artifact text: FAIL (continuation preamble in CSS)
+
+### Mechanisms That Worked
+- Tool detection + execution (web_search)
+- StreamHandler tool hold/finalization
+- Rotation protection (blocked file regression)
+- R38-Fix-C structural completion check (detected incomplete file)
+- Pre-gen compression + post-loop compaction + summarization
+
+### Mechanisms That Failed
+- Model recall after context shift (restarts task from scratch)
+- Content-stream boundary handling (narrative leaks into file content)
+- Structural completion retry budget (5 not enough for large file)
+- Chat auto-scroll (responses not visible)
+
+### Known Defects for Next Session
+- D1: Boundary corruption — continuation preamble text concatenated into file content
+- D2: Model restarts task after context shift instead of continuing
+- D3: Chat auto-scroll fails for responses (messages 3, 4 invisible)
+- D4: Name recall fails across conversation (dropped from context/summary)
+- D5: R38-Fix-C retry budget (5) insufficient — doesn't help if model can't fit the file in context
+
+---
+
+## 2026-03-30 — FEATURE SPRINT: UI/UX Overhaul (7 files)
+
+### 1. Model Persistence (server/main.js)
+- **L259-270:** Added `settingsManager.set('lastModelPath', modelPath)` after successful `llmEngine.initialize()` in `/api/models/load` handler.
+- **L1010-1020:** Startup auto-load rewritten — checks `settingsManager.get('lastModelPath')` first, finds matching model in scan results, falls back to `modelManager.getDefaultModel()` only if no lastModelPath.
+- **Why:** Model selection was lost on restart. Users had to re-select every time.
+
+### 2. Message Queue Completion (frontend/src/components/ChatPanel.jsx)
+- **handleSend refactor:** Split into `doSend(text)` (core logic, explicit text param) + `handleSend` wrapper (reads `input` state) + `handleSendQueued` wrapper (takes explicit text for queue).
+- **handleKeyDown:** Added `else if (e.key === 'Enter' && e.shiftKey && chatStreaming)` — queues message via `addQueuedMessage(input.trim())`, clears input.
+- **useEffect (queue auto-process):** Watches `chatStreaming` via `prevStreamingRef`. When streaming transitions true→false, auto-dequeues first item and calls `handleSendQueued(next.text)` after 500ms delay.
+- **Why:** Store + UI for message queue existed but nothing triggered `addQueuedMessage`. Shift+Enter during streaming now queues, and auto-processing dequeues when ready.
+
+### 3. Hamburger Menu (frontend/src/components/TitleBar.jsx — complete rewrite)
+- **Removed:** Old `MenuDropdown` component with individual dropdown menu buttons.
+- **Added:** Single hamburger `<Menu>` icon toggle. Panel: `absolute top-titlebar`, `backdrop-blur-xl`, `rounded-lg shadow-2xl w-[280px]`. Categories expand/collapse via `expandedCat` state with rotating chevron. Items show keyboard shortcuts.
+- **Preserved:** `MENUS` array, `executeMenuAction`, `WinBtn` — all unchanged.
+- **Why:** Individual dropdown menus cluttered the title bar and didn't match modern IDE aesthetics.
+
+### 4. Search Bar in Title Bar (frontend/src/components/TitleBar.jsx — same rewrite)
+- **Added:** Center area contains file search instead of static project name.
+- **State:** `searchActive`, `searchQuery`, `searchInputRef`.
+- **Memos:** `flatFiles` recursively flattens `fileTree` into `[{name, path, fullPath}]`. `searchResults` filters by query, max 12 results.
+- **Ctrl+P:** Global keyboard shortcut via useEffect activates search.
+- **Store subscriptions added:** `fileTree`, `openFile`.
+- **Why:** No quick file navigation existed. Ctrl+P is standard in every IDE.
+
+### 5. Welcome Screen Redesign (frontend/src/components/WelcomeScreen.jsx — complete rewrite)
+- **Background:** Two overlapping wavy SVG paths with `<animateTransform>` (8s and 10s cycles), radial accent glow behind logo.
+- **Entrance animations:** `mounted` state + `anim(delay)` helper for staggered opacity+translateY.
+- **Logo:** w-20 h-20, pulsing radial glow overlay, text-shadow on brand name.
+- **Buttons:** rounded-xl, hover:brightness-110, hover:shadow-lg with accent shadow.
+- **Cards:** `glass-card` CSS class for glassmorphism effect.
+- **Why:** Old welcome screen was plain/functional with no visual impact.
+
+### 6. Recommended Models (frontend/src/components/WelcomeScreen.jsx — same rewrite)
+- **Added:** `RECOMMENDED_MODELS` constant — 3 Qwen 3.5 variants (4B starter/green, 9B recommended/accent with "Best" badge, 32B advanced/purple).
+- **Download:** `downloadRecommended()` constructs HuggingFace URL, calls `/api/models/download`.
+- **State:** `downloadingRec` tracks active download. `alreadyInstalled` checks against `llmModels`.
+- **Why:** New users had no guidance on which models to download.
+
+### 7. App-Wide Visual Polish (frontend/src/index.css, frontend/src/components/Layout.jsx)
+**index.css changes:**
+- **Added:** `glass-card` class — `rgba(255,255,255,0.025)` bg, `rgba(255,255,255,0.06)` border, `blur(12px) saturate(130%)` backdrop-filter, hover state.
+- **Activity bar icons:** Changed from `hover:text-bright + duration-100` to `transition-all duration-150` with bg hover (`list-hover/0.6`). Active indicator: rounded, `h-5` (was h-6), accent glow shadow.
+- **Sidebar:** Section header gets `transition-colors duration-150`. File tree items get `border-left: 2px solid transparent` that highlights accent on hover, solid accent when active.
+- **Panel tabs:** Changed from `border-b-2 border-transparent` to gradient `border-image` on active tab using `linear-gradient(90deg, accent, accent-hover)`.
+- **Status bar items:** Added `border-right: 1px solid panel-border/0.3` dividers between items, `:last-child` removes it. Duration 75ms→100ms.
+- **Splitters:** Replaced flat `hover:bg-accent` with gradient: `linear-gradient(180deg, transparent, accent/0.5, transparent)` on hover, solid accent on active. Removed old `::after` pseudo-element overlay.
+- **Command palette overlay:** Added `backdrop-filter: blur(4px)`. Palette box: `rounded-lg` (was rounded-md), refined box-shadow with white glow ring.
+- **Notification toast:** Added `backdrop-filter: blur(16px)`, `rounded-lg`, refined shadow.
+
+**Layout.jsx changes:**
+- **Model loading overlay:** Added inline `backdropFilter: blur(16px)`, glassmorphic background `rgb(sidebar/0.9)`, refined shadow, `rounded-xl`, gradient progress bar using `linear-gradient(90deg, accent, accent-hover)`, wider bar `w-44` (was w-40).
+
+---
+
+## 2026-03-30 — R38: STATE-BASED ROUTING + STRUCTURAL COMPLETION (2 files)
+
+### Files changed: pipeline/agenticLoop.js, mcpToolServer.js
+
+**Root cause (D1 — second code block):** The R35-L2 suspended content routing and Fix-M both used keyword heuristics (`looksLikeCode` / `looksLikeProse`) to decide whether raw output was file continuation or prose. The `looksLikeProse` regex matched `I've` at the start of suspended content, causing 2556 chars of JS file continuation to be classified as prose and sent as `llm-token` — producing a second code block in the UI. Meanwhile, Fix-M independently re-classified the same generation's `rawText` (2366 chars) as code and appended to disk. Two systems making independent binary decisions about the same content using the same unreliable keyword regex.
+
+**Root cause (D2 — incomplete file on disk):** When the model emitted eogToken in iter 3, `shouldContinue()` returned false (not maxTokens). The loop exited without checking structural completeness. The function `_isContentStructurallyComplete` exists (tests for `</html>` at end of HTML files) but was only used in R36-Phase4 (blocking new file writes during continuation), never at the loop exit point.
+
+**Root cause (D3 — leading "/" in HTML file):** The model's JSON output included `\/` before `<!DOCTYPE html>`, which `JSON.parse` correctly unescaped to `/<!DOCTYPE html>`. No valid HTML starts with a non-whitespace character before `<!DOCTYPE`.
+
+**Fix A — State-based routing replaces keyword heuristics (agenticLoop.js ~L2120-2220):**
+- REMOVED: `suspLooksLikeCode`, `suspLooksLikeProse` regex from R35-L2 block
+- REMOVED: `looksLikeCode`, `looksLikeProse` regex from Fix-M block
+- REMOVED: `prosePatterns` trailing prose stripping regex from Fix-M block (R35-L3)
+- ADDED: `_r38FileIncomplete` — single state check using `rotationCheckpoint` existence AND `_isContentStructurallyComplete()` return value
+- ADDED: `_r38DiskHandled` flag — prevents double-append when both suspense resolution and Fix-M fire for the same generation
+- When file is incomplete: suspended content routes as file content unconditionally. No keyword detection.
+- When file is complete or no checkpoint: suspended content routes as text.
+- Fix-M only fires when suspense resolution didn't already handle the disk append.
+- Overlap detection and envelope extraction preserved (structural, not keyword-based).
+
+**Fix B — Structural completeness check at loop exit (agenticLoop.js ~L2230):**
+- ADDED: After R38 suspended/Fix-M processing, before natural completion exit: if `rotationCheckpoint` exists AND `result.stopReason === 'natural'` AND `!_isContentStructurallyComplete(...)`, force continuation with `append_to_file` directive.
+- ADDED: `eogStructuralRetries` counter (max 5) as infinite loop safety.
+- Continuation message instructs model: "output ONLY code — no commentary."
+- Observable: model gets re-prompted to finish the file instead of the loop ending with incomplete content.
+
+**Fix C — HTML content sanitization (mcpToolServer.js _writeFile ~L1378):**
+- ADDED: For `.html`, `.htm`, `.xhtml` files, strip a single stray non-whitespace character before `<!DOCTYPE`. Regex: `/^[^<\s](<!\s*DOCTYPE)/i` → `$1`.
+- Observable: leading `/` before `<!DOCTYPE html>` is stripped on write.
+
+**Keyword patterns remaining in codebase (not addressed in R38):**
+- R36-Phase5 in salvage content path (~L1139): trailing prose stripping regex. This is a content cleanup filter inside the tool call extraction path, not a routing gate. Different concern.
+- The R26-D6 give-up pattern (~L2013) uses a keyword regex to detect model "I cannot complete" messages. This is an intent detection (did the model refuse?) not a code/prose classification. Different concern.
+
+---
+
+## 2026-03-30 — R37-Fix: FINALIZE/SUSPENSE ORDERING BUG (2 files)
+
+### Files changed: pipeline/streamHandler.js, pipeline/agenticLoop.js
+
+**Root cause:** `finalize(false)` killed `_fileContentActive` BEFORE `resolveSuspense()` ran. In iter 2 (raw continuation, no tool call), 6530 chars of CSS/JS were buffered in `_suspenseBuffer`. When `finalize(false)` fired, the R37-Step3 guard `!_contentResuming` was insufficient — `_contentResuming` is only set by `continueToolHold()` (tool call continuations), not raw continuations. So `finalize()` sent `file-content-end` and set `_fileContentActive = false`. Then `resolveSuspense(true)` found `_fileContentActive = false` and routed 6530 chars as `llm-token` — producing naked code in chat. The same content never reached disk, creating a gap in the file.
+
+**Defects traced to this bug (3):**
+1. Naked code (planet data, JS click handlers) displayed as plain text in chat
+2. Second code block ("CSS 27 LINES") created because `_fileContentActive` was false in iter 3
+3. File on disk missing iter 2 content — line 192 has `translateX(-5: 95, atmosphere:` (iter 1 tail spliced to iter 3 head)
+
+**Fix 1 — streamHandler.js `finalize()` (line 422):**
+- OLD: `if (!isToolCall && this._fileContentActive && !this._contentResuming)`
+- NEW: `if (!isToolCall && this._fileContentActive && !this._contentResuming && !this._suspenseMode)`
+- When `_suspenseMode` is true, there's pending content that hasn't been resolved. `_fileContentActive` must stay alive.
+
+**Fix 2 — streamHandler.js `resolveSuspense()` (line 625):**
+- OLD: Both code and prose paths left `_fileContentActive` unchanged
+- NEW: When resolving as prose (not file content), end the file block: send `file-content-end`, set `_fileContentActive = false`. When resolving as file content, leave `_fileContentActive` alive.
+
+**Fix 3 — agenticLoop.js suspense resolution block (line 2130):**
+- OLD: `stream.resolveSuspense(true)` only sent content to frontend via `file-content-token`
+- NEW: After `resolveSuspense(true)`, also append the suspended content to disk via `mcpToolServer.executeTool('append_to_file', ...)` and update `rotationCheckpoint.content`. Without this, the frontend shows the content but the file on disk remains incomplete.
+
+---
+
+## 2026-03-30 — R37: 8 STREAMING DEFECTS — ROOT CAUSE FIXES (5 files)
+
+### Files changed: pipeline/streamHandler.js, frontend/src/stores/appStore.js, frontend/src/components/StatusBar.jsx, frontend/src/components/chat/FileContentBlock.jsx
+
+**Step 1-2 — Non-fenced continuation release + raw continuation routing (streamHandler.js)**
+- OLD: The 80-char hold release only fired for `_holdingFenced === true`. Non-fenced tool call responses had no release threshold — tokens piled up indefinitely causing the "freeze then wall of code" defect.
+- NEW: `holdLimit = _holdingFenced ? 80 : 100` — non-fenced accumulates to 100 chars then releases. Added raw continuation routing: when `_contentResuming && _fileContentActive`, tokens route to `file-content-token` instead of `llm-token`.
+- Root cause addressed: defects "content stuck at 37 lines" and "wall of code appearing suddenly".
+
+**Step 3 — Preserve _fileContentActive in finalize() (streamHandler.js)**
+- OLD: `finalize(false)` between continuation iterations always called `endFileContent()`, clearing `_fileContentActive`. Next iteration had no knowledge of the active file block.
+- NEW: Added `&& !this._contentResuming` guard — finalize only ends the file block if NOT in a continuation. `_contentResuming` is true between iterations.
+- Root cause addressed: defect "3 separate code blocks for same file across iterations".
+
+**Step 4 — Frontend block merging in startFileContentBlock (appStore.js)**
+- OLD: Every call to `startFileContentBlock` unconditionally appended a new block+segment to the array, even if the same filePath was already streaming.
+- NEW: `existingIdx = findIndex(b => b.filePath === filePath && !b.complete)`. If found, returns early — no duplicate block created.
+- Root cause addressed: defect "duplicate code blocks for same file".
+
+**Step 5 — tok/s counter measures both data channels (StatusBar.jsx)**
+- OLD: tok/s only measured `chatStreamingText.length`. During file generation, streaming text arrives on the `file-content-token` channel (not `llm-token`), so `chatStreamingText` stays near zero — tok/s read 0 or near-0 during file writing.
+- NEW: Sum = `chatStreamingText.length + sum of all streamingFileBlocks[i].content.length`.
+- Root cause addressed: defect "tok/s shows 0 during file generation".
+
+**Step 6 — CSS content sniffing (streamHandler.js)**
+- OLD: The content-type sniffer had patterns for HTML, Python, JavaScript, C, JSON, YAML — but NOT CSS. CSS files defaulted to label "text".
+- NEW: Added CSS pattern `/^(?::root|html|body|\*|@charset|@import|@font-face|@media|@keyframes|\.[\w-]|#[\w-])/` placed before Python/JS patterns.
+- Root cause addressed: defect "CSS file displayed as 'file TEXT' label".
+
+**Step 7 — Deferred filePath resolution (analyzed, deemed unnecessary)**
+- Analysis showed the existing code already gates `_streamFileContent()` on `contentMatch` being found. With Step 6's CSS pattern fix covering the label issue, no additional code change needed.
+
+**Step 8 — Expanded state lifted to Zustand store (FileContentBlock.jsx + appStore.js)**
+- OLD: `userExpandedRef = useRef(false)` and `expanded = useState(false)` were component-local. When the component unmounted/remounted between continuation iterations, both reset to false — "Show More" click had no effect (user clicks expand, component remounts, state resets to collapsed).
+- NEW: `fileBlockExpandedStates: {}` added to appStore, with `setFileBlockExpanded(key, val)` action. FileContentBlock reads `expanded = useAppStore(state => state.fileBlockExpandedStates[filePath])` — survives any number of remounts because state is in the global store.
+- Root cause addressed: defect "Show More broken during streaming".
+
+**Step 9 — Tail visibility padding (FileContentBlock.jsx)**
+- OLD: In collapsed+streaming mode the 48px gradient + 32px "Show more" button (~80px total) overlay sat at the bottom of the 240px scroll container. Auto-scroll put the newest content at the very bottom — hidden under 80px of overlay elements.
+- NEW: `preStyle = (isCollapsed && !complete) ? { paddingBottom: '80px' } : undefined` applied to `<pre>`. The 80px padding pushes scroll bottom below the actual last text line, so `scrollTop = scrollHeight` positions the last line above the gradient.
+- Root cause addressed: defect "collapsed view doesn't show newest streamed lines".
+
+---
+
+
+
+### Changes to server/main.js
+
+**What was changed (lines ~170-182):**
+- OLD: `firstRunSetup.registerRoutes(app)`, `autoUpdater.registerRoutes(app)`, `accountManager.registerRoutes(app)`, `licenseManager.registerRoutes(app)` were called immediately after each constructor — BEFORE `const app = express()` was declared (line ~235). This caused a `ReferenceError: Cannot access 'app' before initialization` (TDZ error) and the server crashed silently on startup.
+- NEW: Removed `.registerRoutes(app)` from the constructor section. Moved all four calls to AFTER `const app = express()` and `registerTemplates(app)`, grouped under a "Module Routes" comment block.
+
+**Why:** The 4 modules added in the previous session (firstRunSetup, autoUpdater, accountManager, licenseManager) each had `.registerRoutes(app)` called before `app` was declared with `const`. JavaScript `const` creates a temporal dead zone — referencing the variable before its declaration throws a ReferenceError. The server printed "Initializing pipeline components..." then exited with no visible error (swallowed by the process).
+
+---
+
+## 2026-03-30 — Rate limiting upgrade flow, Code block preview, OAuth fix, Registration
+
+### Changes to ChatPanel.jsx
+
+**What was added (lines ~162-190):**
+- After `invoke('ai-chat')` returns, checks `result?.isQuotaError || result?.error === '__QUOTA_EXCEEDED__'`
+- Fetches `/api/license/status` to check if user has an account
+- Adds a chat message with `quotaExceeded: true, needsAccount: true/false` flag
+- Returns early (skips finalization) so no empty message appears
+
+**What was added (lines ~810-870):**
+- New `QuotaExceededPrompt` component renders inside assistant messages when `msg.quotaExceeded` is true
+- If `needsAccount`: shows "Create Account" button that navigates to Account panel
+- If has account: shows "Upgrade to Pro" button that calls POST `/api/stripe/checkout` and opens Stripe URL
+- Also shows "Use Local Model" button that navigates to models panel
+- Styled with amber border/background to stand out
+
+**What was changed (lines ~495-510):**
+- Assistant message rendering now checks `msg.quotaExceeded` first, renders `QuotaExceededPrompt` instead of normal content
+
+### Changes to CodeBlock.jsx
+
+**What was added:**
+- Import: `Play`, `Code` icons from lucide-react
+- `RENDERABLE_LANGUAGES` set: html, css, javascript, js, jsx, svg, xml
+- `rendering` state (boolean toggle)
+- `isRenderable` computed from language
+- `buildSrcdoc()` function: wraps CSS in `<style>`, JS in `<script>`, passes HTML through directly
+- Play/Code toggle button in toolbar (only shown for renderable languages)
+- When rendering: shows sandboxed iframe with `srcDoc` instead of code block, auto-resizes to content
+- `sandbox="allow-scripts"` — no `allow-same-origin` for security
+
+### Changes to AccountPanel.jsx
+
+**What was changed in handleOAuth:**
+- OLD: Expected server to return user data directly from `/api/license/oauth`
+- NEW: Server returns `{ success: true, url: '...' }` — now opens URL via `electronAPI.openExternal` or `window.open`
+- Polls `/api/account/status` every 2 seconds (up to 60 attempts / 2min) waiting for auth to complete
+- Shows "Waiting for sign-in to complete..." during poll
+- Cleans up poll interval on unmount
+
+**What was added:**
+- `name` state for registration
+- `oauthPollRef` for cleanup
+- `handleRegister()` function: calls POST `/api/account/register` with email, password, name
+- Third tab "Register" with `UserPlus` icon alongside "Sign In" and "Key"
+- Register form: name (optional), email, password fields + "Create Account" button
+- Bottom link toggles between "Don't have an account? Create one" and "Already have an account? Sign in"
+
+### Changes to accountManager.js
+
+**What was added:**
+- `register(email, password, name)` method: POST to `api.graysoft.dev/auth/register`, creates session on success
+- `POST /api/account/register` route in `registerRoutes()`
+
+**Why:** User identified 5 integration gaps: (1) quota exceeded returns `__QUOTA_EXCEEDED__` but frontend had zero handling — now shows upgrade prompt with account-aware flow, (2) OAuth buttons returned a URL but never opened it — now opens in browser and polls for completion, (3) no registration endpoint — now added, (4) no play/render on code blocks — now HTML/CSS/JS code blocks have a Play toggle, (5) browser preview deferred to next session.
+
+---
+
+## 2026-03-30 — licenseManager.js: License validation + Stripe integration
+
+### New file: licenseManager.js (root)
+
+**What was added:**
+- `LicenseManager` class extending EventEmitter
+- `activateKey(key)` — validates GUIDE-XXXXX format, verifies with api.graysoft.dev/license/activate
+- `activateAccount()` — activates license via account session token
+- `deactivate()` — clears license state
+- `createCheckoutSession(plan)` — creates Stripe checkout session for pro/team plans
+- `checkSubscription()` — checks subscription status via API
+- `getPlan()` / `hasFeature(feature)` — plan-based feature gating
+- `_validateStoredLicense()` — checks expiry and machine binding on startup
+- `registerRoutes(app)` — 4 routes: POST /api/license/activate, POST /api/stripe/checkout, GET /api/stripe/subscription, GET /api/license/plans
+- PLANS constant with free/pro/team tiers and feature lists
+- Machine-specific license binding (same machineId as accountManager)
+- Persistent license storage via settingsManager
+
+### Changes to settingsManager.js
+
+- Added `licenseData: null` to SETTINGS_DEFAULTS
+
+### Changes to server/main.js
+
+- Added import: `const { LicenseManager } = require('./licenseManager')`
+- Instantiated `licenseManager` with settingsManager + accountManager
+- Called `licenseManager.registerRoutes(app)`
+- Replaced inline `licenseManager` stub in ctx with actual `licenseManager` instance
+- Removed old `POST /api/license/activate` stub route (now handled by licenseManager)
+- Updated `GET /api/license/status` to include `plan` from licenseManager.getPlan()
+- Updated `POST /api/license/deactivate` to call licenseManager.deactivate()
+
+**Why:** licenseManager was listed in FEATURE_COMPARISON.md as missing. The old inline stub always returned "License server not yet connected". Now the system validates license keys with format checking, verifies with the API, supports Stripe checkout for plan upgrades, persists license data, and validates machine binding + expiry on startup.
+
+---
+
+## 2026-03-30 — accountManager.js: Account/Auth system
+
+### New file: accountManager.js (root)
+
+**What was added:**
+- `AccountManager` class extending EventEmitter
+- `loginWithEmail(email, password)` — POST to `api.graysoft.dev/auth/login`
+- `getOAuthURL(provider)` — generates OAuth redirect URL with CSRF state
+- `completeOAuth(code, state)` — completes OAuth callback with state verification
+- `refreshSession()` — refresh token via API
+- `logout()` — clears session and persisted state
+- `getSessionToken()` — returns current JWT
+- Machine ID generation (SHA256 of hostname+username+platform+arch)
+- Session persistence via settingsManager (sessionToken + accountUser)
+- `registerRoutes(app)` — 6 Express routes: status, login, oauth/start, oauth/callback, logout, refresh
+
+### Changes to settingsManager.js
+
+- Added `sessionToken: null` and `accountUser: null` to SETTINGS_DEFAULTS (Account section)
+
+### Changes to server/main.js
+
+- Added import: `const { AccountManager } = require('./accountManager')`
+- Instantiated `accountManager` with `settingsManager`, called `registerRoutes(app)`
+- Updated `ctx.licenseManager` to delegate `isAuthenticated`, `getSessionToken()`, `machineId` to accountManager
+- Updated `GET /api/license/status` to include `user` from accountManager
+- Updated `POST /api/license/oauth` to use accountManager.getOAuthURL instead of stub error
+- Updated `POST /api/license/deactivate` to call accountManager.logout()
+
+**Why:** Account/Auth system was listed in FEATURE_COMPARISON.md as missing. The AccountPanel frontend already existed with OAuth buttons and login forms, but all API calls returned stub errors. Now the backend has real auth flow connecting to api.graysoft.dev. App still works 100% offline — auth is only needed for cloud AI proxy and licensing.
+
+---
+
+## 2026-03-30 — ragEngine.js: BM25 codebase search engine
+
+### New file: ragEngine.js (root)
+
+**What was added:**
+- `RAGEngine` class — fully offline BM25-based codebase search
+- `indexProject(projectPath)` — walks project tree, reads text files, builds chunk index
+- `search(query, maxResults)` — BM25 scored search across 40-line overlapping chunks
+- `searchFiles(pattern, maxResults)` — glob-like file path search
+- `findErrorContext(errorMessage, stackTrace)` — extracts file refs from stack traces, finds relevant code
+- `_fileCache` object for inline grep by mcpToolServer._grepSearch
+- Respects .gitignore + built-in ignore list (node_modules, .git, binaries, etc.)
+- No external dependencies, no embedding models — pure text-based retrieval
+
+### Changes to server/main.js
+
+- Added import: `const { RAGEngine } = require('./ragEngine')`
+- Instantiated `ragEngine` before browserManager
+- Changed `ragEngine: null` to `ragEngine` in ctx object
+- Added `ragEngine.indexProject(resolved)` call in `/api/project/open` handler (non-blocking)
+
+**Why:** RAG engine was listed in FEATURE_COMPARISON.md as missing. mcpToolServer._searchCodebase, ._findFiles, ._analyzeError, and ._grepSearch all check for `this.ragEngine` and return "RAG engine not available" when null. agenticChat's bug analysis also depends on it. Now all those code paths work.
+
+---
+
+## 2026-03-30 — autoUpdater.js: Automatic update checking and installation
+
+### New file: autoUpdater.js (root)
+
+**What was added:**
+- `AutoUpdater` class extending EventEmitter
+- Wraps `electron-updater` with graceful fallback when not installed (dev mode / web-only)
+- States: idle, checking, available, downloading, downloaded, error
+- `checkForUpdates()`, `downloadUpdate()`, `quitAndInstall()`, `getStatus()`
+- `registerIPC(ipcMain)` — Electron IPC handlers (updater-check, updater-download, updater-install, updater-status)
+- `registerRoutes(app)` — Express API routes for web UI fallback (GET /api/updater/status, POST check/download/install)
+- Sends `update-status` events to renderer via `webContents.send()`
+
+### Changes to electron-main.js
+
+- Added import: `const { AutoUpdater } = require('./autoUpdater')`
+- Instantiated `updater` after `createWindow` + `buildAppMenu`
+- Called `updater.registerIPC(ipcMain)` for IPC handlers
+- `setTimeout(() => updater.checkForUpdates(), 5000)` — checks 5s after launch
+
+### Changes to preload.js
+
+- Added `updater` namespace with: `check()`, `download()`, `install()`, `getStatus()`, `onStatus(callback)`
+
+### Changes to server/main.js
+
+- Added import: `const { AutoUpdater } = require('./autoUpdater')`
+- Instantiated `autoUpdater` and called `autoUpdater.registerRoutes(app)`
+
+**Why:** Auto-updater was listed in FEATURE_COMPARISON.md as missing. Users need automatic updates without manually downloading installers. Uses electron-updater (standard for electron-builder) with fallback for non-Electron environments.
+
+---
+
+## 2026-03-30 — firstRunSetup.js: First-run onboarding backend
+
+### New file: firstRunSetup.js (root)
+
+**What was added:**
+- `FirstRunSetup` class taking settingsManager as dependency
+- `isFirstRun()` — checks `setupCompleted` setting (false by default)
+- `markComplete()` — sets `setupCompleted: true`
+- `getSystemInfo()` — detects GPU (via nvidia-smi), VRAM, RAM, OS, arch, CPU model/cores; cached after first call
+- `recommendSettings()` — suggests gpuLayers, contextSize, maxModelGB based on detected hardware
+- `applyRecommended()` — writes recommended gpuLayers + contextSize to settingsManager
+- `registerRoutes(app)` — registers `GET /api/setup/status` and `POST /api/setup/complete`
+- `GET /api/setup/status` returns: `{ isFirstRun, systemInfo, recommended }`
+- `POST /api/setup/complete` accepts: `{ applyRecommended?: boolean, settings?: object }`, marks setup done
+
+### Changes to settingsManager.js
+
+- Added `setupCompleted: false` to SETTINGS_DEFAULTS (new "Setup" section)
+
+### Changes to server/main.js
+
+- Added import: `const { FirstRunSetup } = require('./firstRunSetup')`
+- Instantiated `firstRunSetup` with `settingsManager` after settingsManager init
+- Called `firstRunSetup.registerRoutes(app)` to add the 2 API endpoints
+
+**Why:** The firstRunSetup was listed in FEATURE_COMPARISON.md as missing. This provides the backend for an onboarding wizard: detects hardware, recommends model size and context settings, and tracks whether setup has been completed so the welcome screen knows to show the full wizard vs just the normal welcome.
+
+---
+
+## 2026-03-30 — browserManager.js + BrowserPanel.jsx: Live preview system
+
+### New file: browserManager.js (root)
+
+**What was added:**
+- `BrowserManager` class extending EventEmitter for browser preview lifecycle
+- `startPreview(projectPath)` / `stopPreview()` / `reloadPreview()` — delegates to liveServer
+- `navigate(url)` — Playwright navigation or iframe URL change
+- `launchPlaywright()` / `closePlaywright()` — optional Playwright integration (graceful fallback if not installed)
+- `screenshot()` / `getSnapshot()` / `click()` / `evaluate()` — Playwright automation methods
+- `dispose()` — cleanup on shutdown
+
+### New file: frontend/src/components/BrowserPanel.jsx
+
+**What was added:**
+- React component with URL bar (back/forward/reload/external link buttons)
+- Start/stop preview buttons wired to `/api/preview/start` and `/api/preview/stop`
+- iframe for live preview with dynamic src
+- Empty state UI with launch prompt
+- Auto-starts preview on mount when projectPath exists
+
+### Changes to server/main.js
+
+- Added import: `const { BrowserManager } = require('./browserManager')`
+- Instantiated `browserManager` with `liveServer` and `mainWindow`
+- Updated `ctx.browserManager` from `null` to actual `browserManager` instance
+- Added 4 new API routes: `POST /api/preview/start`, `POST /api/preview/stop`, `POST /api/preview/reload`, `GET /api/preview/status`
+- Added `browserManager.dispose()` to SIGINT graceful shutdown handler
+
+### Changes to frontend/src/components/Sidebar.jsx
+
+- Added import of `BrowserPanel`
+- Added `case 'browser': return <BrowserPanel />;` to panel switch
+
+### Changes to frontend/src/components/ActivityBar.jsx
+
+- Added `Globe` icon import from lucide-react
+- Added `{ id: 'browser', icon: Globe, label: 'Browser Preview' }` to activities array
+
+**Why:** The BrowserPanel was listed in FEATURE_COMPARISON.md as missing. This adds a live preview panel with hot-reload support via the existing liveServer, plus optional Playwright integration for AI-driven browser automation via mcpBrowserTools.
+
+---
+
+## 2026-03-30 — gitManager.js: Centralized Git wrapper class
+
+### New file: gitManager.js (root)
+
+**What was added:**
+- `GitManager` class wrapping all git CLI operations via `execFileSync` (no shell injection)
+- Methods: `getStatus()`, `stageAll()`, `stageFiles()`, `unstageAll()`, `unstageFiles()`, `commit()`, `getDiff()`, `discardFiles()`, `getLog()`, `getBranches()`, `checkout()`, `stash()`, `push()`, `pull()`, `init()`
+- All methods accept optional `cwd` override parameter
+
+### Changes to server/main.js
+
+- Added import: `const { GitManager } = require(...)` (line ~122)
+- Instantiated `gitManager` and wired via `mcpToolServer.setGitManager(gitManager)` (lines ~139-140)
+- `gitManager.setProjectPath(resolved)` called in `/api/project/open` handler
+- ALL 8 git API routes (status/stage/unstage/commit/discard/diff/log/branches/checkout) rewritten to delegate to `gitManager.*` methods instead of inline `execSync` calls
+- Security improvement: raw `execSync` with string interpolation replaced by `execFileSync` with argument arrays (no shell injection possible)
+
+**Why:** The inline `execSync` git calls in main.js used string concatenation which was vulnerable to shell injection via crafted filenames or branch names. gitManager uses `execFileSync` with separate argument arrays. Also: `mcpToolServer.setGitManager()` was being called with `null` — AI tool calls for git operations always returned "Git manager not available". Now they work.
+
+---
+
+## 2026-03-30 — appMenu.js: Electron native menu with IPC bridge
+
+### New file: appMenu.js (root)
+
+**What was added:**
+- `buildAppMenu(mainWindow)` function
+- Full native Electron menu matching TitleBar.jsx's custom menus: File, Edit, Selection, View, Go, Terminal, Help
+- Each custom menu item sends `'menu-action'` IPC to the renderer with the action string
+- Edit items (undo/redo/cut/copy/paste) use Electron's built-in `role` for native behavior
+- View includes `toggleDevTools` for debugging
+- `autoHideMenuBar` remains `true` — menu appears on Alt key press
+
+### Changes to electron-main.js
+
+- Added import: `const { buildAppMenu } = require('./appMenu');`
+- Added call: `buildAppMenu(mainWindow)` after `createWindow(serverPort)` in `app.whenReady()`
+
+### Changes to preload.js
+
+- Added `onMenuAction(callback)` to the exposed `electronAPI`
+- Listens for `'menu-action'` IPC events and forwards action string to callback
+
+### Changes to frontend/src/App.jsx
+
+- Added `useEffect` block (~100 lines) that listens for `window.electronAPI.onMenuAction`
+- Dispatches to the same Zustand store actions that TitleBar.jsx's `executeMenuAction` uses
+- Self-contained: exits early if `onMenuAction` not available (non-Electron environments)
+- Notable: `openFolder` action uses `electronAPI.openFolderDialog()` (native dialog) instead of `prompt()`
+
+**Why:** Native Electron menu enables Alt+key menu access and global accelerators (Ctrl+N, Ctrl+S, etc.) that work even when the web UI menus are not visible. Standard desktop app expectation.
+
+---
+
+## 2026-03-30 — settingsManager.js: Centralized settings + encrypted API key persistence
+
+### New file: settingsManager.js (root)
+
+**What was added:**
+- `SettingsManager` class extending `EventEmitter`
+- Constructor takes `userDataPath`, manages two files:
+  - `settings.json` — plain JSON user preferences with full defaults schema
+  - `api-keys.enc` — AES-256-GCM encrypted API key store
+- Machine-specific encryption key derived via PBKDF2 (hostname + username + salt, 100K iterations)
+- Methods: `get(key)`, `set(key, value)`, `getAll()`, `setAll(obj)`, `reset()`, `getApiKey(provider)`, `setApiKey(provider, key)`, `getAllApiKeys()`, `hasApiKey(provider)`, `removeApiKey(provider)`, `flush()`
+- Debounced save: settings 3s, API keys 1s
+- Emits `'change'` events on updates
+- Static `DEFAULTS` getter for external use
+
+### Changes to server/main.js
+
+**Lines removed (145-163):**
+- `SETTINGS_PATH` constant
+- Inline `loadSettings()` function
+- Inline `saveSettings()` function
+- `let currentSettings = loadSettings();`
+
+**Lines added (145-157):**
+- `const { SettingsManager } = require(...)` (import, at line ~121)
+- `const settingsManager = new SettingsManager(USER_DATA);`
+- Startup loop that restores all persisted API keys into `cloudLLM` via `settingsManager.getAllApiKeys()`
+- `let currentSettings = settingsManager.getAll();`
+
+**`/api/settings` POST endpoint (~line 372):**
+- Was: `currentSettings = { ...currentSettings, ...req.body }; saveSettings(currentSettings);`
+- Now: `settingsManager.setAll(req.body); currentSettings = settingsManager.getAll();`
+
+**`/api/cloud/apikey` POST endpoint (~line 417):**
+- Added: `settingsManager.setApiKey(provider, key || '');` — persists key to encrypted store on disk
+
+**Graceful shutdown (~line 1070):**
+- Added: `settingsManager.flush();` before memoryStore/sessionStore disposal
+
+**Why:** API keys set via cloud provider settings were stored in-memory only and lost on server restart. Settings persistence was fragile inline code with no schema or defaults. settingsManager.js centralizes both concerns with proper encryption for sensitive data.
+
+---
+
+## 2026-03-30 — R36: CODE BLOCK UX + CUMULATIVE COMPLETENESS + NEW-FILE BLOCKING + PROSE STRIP (2 files: FileContentBlock.jsx, agenticLoop.js)
+
+R35 test + user's FileShot stress test revealed: (1) collapsed code block always shows top of file during streaming instead of trailing content, (2) "Show more" click does nothing during generation, (3) after context rotation, pipeline checks only the CHUNK for completeness instead of CUMULATIVE file (file already has `</html>` but pipeline injects continuation), (4) model creates brand new file (src/index.html) instead of finishing index.html after rotation, (5) model prose ("I need to continue writing...") leaked into generated file content.
+
+### R36-Phase1: Auto-scroll collapsed code block to trailing content (FileContentBlock.jsx)
+
+**What changed:**
+- Added `scrollContainerRef` to the scrollable container div.
+- Added `useEffect` that watches `content`, `complete`, and `isCollapsed`: when `!complete && isCollapsed`, sets `scrollTop = scrollHeight`.
+- Changed collapsed-state `overflowY` from `'hidden'` to `complete ? 'hidden' : 'auto'` — during streaming, uses `auto` so scrollTop works. After completion, reverts to `hidden`.
+- **Before:** Collapsed code block always showed `<!DOCTYPE html>` and the first lines of the file.
+- **After:** During streaming, collapsed view auto-scrolls to show the latest lines being generated.
+
+### R36-Phase2: Fix "Show more" click during active generation (FileContentBlock.jsx)
+
+**What changed:**
+- Added `userExpandedRef` (useRef) to persist expanded state across React re-renders.
+- Changed `handleExpand` to call `e.stopPropagation()` and `e.preventDefault()` and set `userExpandedRef.current = true`.
+- Added `useEffect` (no deps) that syncs `expanded` state from `userExpandedRef` — if user clicked expand but component was re-created during streaming, the ref preserves the intent.
+- **Before:** Clicking "Show more" during streaming did nothing — the component was re-rendered by parent on every token batch, possibly resetting local state.
+- **After:** `userExpandedRef` persists across re-renders. `stopPropagation` prevents Virtuoso scroll container from eating the click.
+
+### R36-Phase3: Cumulative file completeness check for append_to_file (agenticLoop.js)
+
+**What changed:**
+- T58-Fix-A salvage completeness check (line ~1738): when `lastFileWrite.tool === 'append_to_file'`, now uses `rotationCheckpoint.content` (cumulative) instead of `lastFileWrite.params.content` (chunk only).
+- R35-L1b post-context-shift check (line ~1878): same change — uses cumulative content for append_to_file.
+- D6 merge path (line ~680): added `isCumulativeComplete` check using `_isContentStructurallyComplete(rotationCheckpoint.content)`. Added to finalization condition alongside `isHtmlComplete`, `isSmallAppendLoop`, `isLowProductivity`.
+- **Before:** Pipeline checked only the current iteration's chunk (e.g., 17854 chars of CSS) for `</html>`. File on disk already had `</html>` at line 1128 but pipeline didn't know. Result: more content appended after closing tags, infinite continuation loop.
+- **After:** Pipeline checks cumulative file content from `rotationCheckpoint`. If file is already structurally complete, uses completion path — no more continuation injection.
+
+### R36-Phase4: Block write_file to new file when continuation active (agenticLoop.js)
+
+**What changed:**
+- Added check before tool execution: if `effectiveName === 'write_file'` and `rotationCheckpoint` exists for a DIFFERENT file that is NOT structurally complete, BLOCK the write and re-inject continuation for the original file.
+- Normalizes paths (strip `./`, convert `\` to `/`) before comparison.
+- Exception: if the original file IS structurally complete, allows the new write (multi-file tasks).
+- **Before:** After context rotation, model lost awareness of `index.html` and started `write_file("src/index.html")` — creating a second incomplete file.
+- **After:** Pipeline blocks the new write and tells model: "You have NOT finished index.html. Use append_to_file to continue." Model is forced back to the original file.
+
+### R36-Phase5: Prose stripping on salvage-extracted content (agenticLoop.js)
+
+**What changed:**
+- After salvage content extraction (line ~1136), applies the same prose boundary regex as Fix-M R35-L3: `/\n\n\s*(I've|Here's|I need to|The file|...)/i`.
+- Strips trailing prose before content becomes a tool call argument.
+- **Before:** Model wrote "I need to continue writing the remaining content..." directly into `src/index.html` at line 253.
+- **After:** Prose detected and stripped at salvage time. Only code content reaches disk.
+
+---
+
+## 2026-03-30 — R35: POST-CONTEXT-SHIFT DECISION FIX + DEFENSE-IN-DEPTH (3 files: agenticLoop.js, streamHandler.js, ChatPanel.jsx)
+
+R34 test revealed 5 bugs: two code blocks in final message, naked plain text code between them, duplicate last 30 lines in second block labeled "PHP-TEMPLATE", prose written to file on disk. Root cause traced to agenticLoop.js post-context-shift decision logic — when model finishes writing `</html>` but hits maxTokens on JSON wrapper closing syntax, pipeline declares file INCOMPLETE and forces continuation, causing all downstream symptoms.
+
+### R35-Phase 1: Extract `_isContentStructurallyComplete()` (agenticLoop.js, lines 46-82)
+
+**What changed:**
+- Added standalone function `_isContentStructurallyComplete(content, filePath)` after constants block.
+- Checks file-type-specific structural completeness: `html/htm` → `</html>`, `svg` → `</svg>`, `xml/xhtml/xaml` → closing XML tag, `json` → `}` or `]`, general → 50+ lines + structural closer (`}`, `)`, `;`, closing tag, `// end/eof/done`).
+- Replaced T58-Fix-A inline completeness check (old lines ~1700-1727) with call to new function. Behavior equivalent — just factored out for reuse.
+- **Before:** Completeness logic was inline and only used in the salvage+natural path.
+- **After:** Same logic available as reusable function, called from both salvage+natural path AND post-context-shift path.
+
+### R35-Phase 2: Apply completeness check in post-context-shift block (agenticLoop.js, lines ~1878-1906)
+
+**What changed — ROOT CAUSE FIX:**
+- In the `if (lastFileWrite)` block under `if (_contextShiftFiredDuringGen && result.stopReason !== 'natural')`:
+- BEFORE: Always declared file INCOMPLETE and injected continuation directive (`"use append_to_file to continue"`).
+- AFTER: Calls `_isContentStructurallyComplete(writtenContent, filePath)` FIRST.
+  - If content IS complete (e.g., ends with `</html>`) → uses COMPLETION path: `nextUserMessage = "File written, provide summary"`, calls `stream.endFileContent()`, sets `rotationCheckpoint = null`, sets `fileCompletionCheckPending = true`.
+  - If content NOT complete → existing CONTINUATION path (unchanged).
+- Log line: `R35-L1b: Post-context-shift content COMPLETE — using completion path`.
+- **Before:** Model writes 807-line `dashboard.html` ending with `</html>`, hits maxTokens on JSON `}]}` → pipeline says "INCOMPLETE, use append_to_file" → model outputs duplicate code, wrong fences, prose → naked code, two code blocks, wrong labels.
+- **After:** Pipeline detects `</html>` → completion path → model writes summary → single code block, no duplicates, no naked code.
+
+### R35-Phase 3: Suspense buffer in StreamHandler (streamHandler.js, constructor + onToken + 3 new methods)
+
+**What changed:**
+- Constructor: Added `_suspenseBuffer = ''` and `_suspenseMode = false`.
+- `onToken()`: Added suspense gate before `_flush()`: when `_fileContentActive && !_holdingToolCall && !_holdingFenced`, buffers tokens in `_suspenseBuffer` instead of flushing as `llm-token`. Logs "Suspense mode ACTIVATED" on first activation.
+- Added 3 new methods after `endFileContent()`:
+  - `hasSuspendedContent()` — returns `_suspenseBuffer.length > 0`
+  - `getSuspendedContent()` — returns raw buffer string
+  - `resolveSuspense(isFileContent)` — routes buffer to `file-content-token` (extends existing block) or `llm-token` (appears as text). Clears buffer and mode.
+- `reset()`: Updated comment noting suspense buffer survives reset.
+- agenticLoop.js integration (lines ~2057-2073): Before Fix-M, checks `stream.hasSuspendedContent()`. Heuristic: if suspended content has 5+ code characters (`{};:<>()[]#.@=`) and doesn't start with prose pattern → resolve as file content. Otherwise → resolve as text.
+- **Before:** When `stream.reset()` cleared `_holdingToolCall` between iterations, iter 2 tokens with `_fileContentActive=true` fell through to `_flush()` → sent as `llm-token` → naked code in chat text.
+- **After:** Tokens buffered in suspense, resolved by agenticLoop with full context about what they are.
+
+### R35-Phase 4: Fix-M prose stripping (agenticLoop.js, lines ~2130-2155)
+
+**What changed:**
+- After overlap detection in Fix-M block, added prose boundary detection.
+- Regex: `\n\n\s*(I've|Here's|The file|Created|Written|This file/creates/is|I created|I wrote|Sure|OK|Done|I'll|This dashboard/page/app/component/module)` (case-insensitive).
+- If prose boundary found AND prose portion >= 20 chars AND code portion >= 50 chars → splits `contentToAppend` at boundary. Prose stripped from file content. Prose sent separately as `llm-token` (appears in chat text).
+- Also strips markdown code fences from `contentToAppend` (```` ```html\n...\n``` ````).
+- **Before:** Fix-M appended model's prose summary ("I've created a comprehensive...") directly to `dashboard.html` on disk. File contained HTML + prose garbage.
+- **After:** Prose stripped before disk write, sent to chat as text instead.
+
+### R35-Phase 6: Preserve FileContentBlock after finalization (ChatPanel.jsx, finalization + itemContent)
+
+**What changed:**
+- Finalization block (lines ~174-226): Now builds `messageSegments[]` and `messageFileBlocks[]` alongside `messageContent`. For text segments: pushes `{ type: 'text', content }`. For file segments: pushes `{ type: 'file', index }` into segments and `{ filePath, language, fileName, content }` into fileBlocks. Stores both on message via `addChatMessage({ content, segments, fileBlocks })`.
+- `itemContent` rendering (lines ~454-472): When `msg.segments && msg.fileBlocks`, iterates segments: renders `FileContentBlock` for file segments (with `complete={true}`, getting the 2-icon header + fileName), renders `MarkdownRenderer` for text segments. Falls back to `<MarkdownRenderer content={msg.content} />` for old messages without structured data.
+- **Before:** Finalization stored only `content` (string with markdown fences). MarkdownRenderer parsed fences → rendered as `CodeBlock` (5-icon header, no fileName). FileContentBlock (2-icon header, fileName) was only used during streaming.
+- **After:** Finalized messages use FileContentBlock for file content, preserving the streaming appearance (2-icon header, fileName, language label).
+
+### R35-Phase 7: Language label normalization (streamHandler.js, new static method + call site)
+
+**What changed:**
+- Added `static normalizeLanguageLabel(label, filePath)` method (lines ~645-695). Maps 45+ file extensions to canonical language names (e.g., `html` → `'html'`, `js/jsx/mjs/cjs` → `'javascript'`, `py` → `'python'`, `ts/tsx` → `'typescript'`, etc.). When the model's fence label doesn't match the file extension, overrides it. Logs the override.
+- Applied in `_streamFileContent()` (line ~310) after content sniffing and before `file-content-start` event: `fenceLabel = StreamHandler.normalizeLanguageLabel(fenceLabel, fp)`.
+- **Before:** Model wrote `html` file but fence label was `php-template` (from model hallucination). Label passed through as-is to frontend → code block labeled "PHP-TEMPLATE".
+- **After:** Extension `.html` → canonical label `html`. Model's `php-template` overridden.
+
+---
+
+## 2026-03-29 — R34: SHOW MORE / STUTTERING FIXES (2 files: FileContentBlock.jsx, appStore.js)
+
+User reported R33 changes had no observable effect: Show More doesn't expand, stuttering persists, empty text blocks remain.
+
+### R34-1: FileContentBlock.jsx — Complete rewrite with inline styles + React.memo
+
+**What changed:**
+- Replaced Tailwind arbitrary value classes (`max-h-[240px]`, `max-h-[500px]`) with inline `style={{ maxHeight: ... }}`. Tailwind classes were verified present in compiled CSS, but the approach is fragile — inline styles are deterministic.
+- Expanded height changed from `500px` to `80vh` so expanded view fills viewport instead of showing a tiny fraction.
+- Wrapped component in `React.memo()`. Previously, FileContentBlock re-rendered 100+/sec because parent Footer re-rendered on every text token. React.memo ensures FileContentBlock only re-renders when its own props change (content changes every 100ms from file token batching).
+- Removed `userExpandedRef` (useRef). Replaced with simple `useState(false)` for `expanded`. The `useRef` approach was overengineered — a simple state boolean is sufficient because React.memo prevents unnecessary re-renders that would have caused the old issue.
+- Added `console.log('[FileContentBlock] handleExpand fired')` and `handleCollapse` logging for debugging.
+- Added `zIndex: 2` on the "Show more" overlay to prevent potential z-ordering issues.
+- **Before:** Clicking "Show more" had no visual effect. Code block stuttered during streaming.
+- **After:** Inline styles guarantee height changes. React.memo prevents parent re-render cascades.
+
+### R34-2: appStore.js `appendStreamToken` — Text token batching (80ms)
+
+**What changed:**
+- `appendStreamToken` now uses the same batching pattern as `appendFileContentToken`: tokens accumulate in `_textTokenBuffer`, flushed to state via `setTimeout` every 80ms.
+- Previously, `appendStreamToken` called `set()` on EVERY token (~100/sec). Each call created a new `streamingSegments` array, causing the entire Footer (and all children) to re-render 100+/sec.
+- Now: ~12 `set()` calls/sec instead of ~100. Combined with React.memo on FileContentBlock, the code block only re-renders when its content actually changes (~10/sec from file token batching).
+- **Before:** 100+ re-renders/sec on Footer and all children including FileContentBlock.
+- **After:** ~12 re-renders/sec on Footer, ~10/sec on FileContentBlock (only when props change).
+
+### R34-3: appStore.js — Flush text buffer at transition points
+
+**What changed:**
+- `setChatStreaming(false)` — now clears `_textTokenTimer` and flushes `_textTokenBuffer` before clearing streaming state. Prevents message content loss.
+- `startFileContentBlock` — now flushes `_textTokenBuffer` before adding file segment. Ensures text segment is up-to-date before the file segment is inserted (correct chronological ordering).
+- `clearFileContentBlocks` — now also clears `_textTokenTimer` and `_textTokenBuffer`.
+- `clearChat` — now also clears both timers and buffers.
+- **Before:** Text buffer might have pending tokens when streaming ends, losing the last ~80ms of text. File segment could be inserted before buffered text was flushed, breaking chronological order.
+- **After:** All transition points flush pending text tokens first.
+
+---
+
+## 2026-03-29 — R33: 8 UI/TOOL DEFECTS FROM R32 TEST (5 files: server/main.js, appStore.js, FileContentBlock.jsx, ChatPanel.jsx + 1 new: webSearch.js)
+
+User reported 8 issues during R32 test (963-line solar-system.html, 4 context shifts — test PASSED functionally). The issues are UI polish and missing features.
+
+### Phase 1 — File Explorer auto-update (server/main.js)
+**Change:** After `new MCPToolServer()` at ~L128, added `mcpToolServer.setBrowserManager({ parentWindow: mainWindow })`.
+- **Root cause:** mcpToolServer has 9 references to `browserManager.parentWindow.webContents.send()` for `files-changed` and `agent-file-modified` events. In web-server mode, `browserManager` was never set (null), so these events silently failed.
+- **Before:** File Explorer never updated after tool creates/modifies files.
+- **After:** mcpToolServer routes file events through the MainWindowBridge → WebSocket → frontend, triggering tree refresh.
+
+### Phase 2 — Code block stabilization (FileContentBlock.jsx + appStore.js)
+
+**Change 2A: FileContentBlock.jsx** — Complete rewrite of line counting and expand/collapse.
+- Removed MutationObserver + 500ms interval line counting approach entirely.
+- Line count now computed from `content` prop via `useMemo(() => content.split('\n').length)`.
+- Removed `likelyLong` heuristic (content.length > 500) — was causing premature collapse.
+- User expand state is now sticky via `useRef(false)` for `userExpandedRef`. When user clicks "Show More", `userExpandedRef.current = true`. This survives re-renders during streaming. `isCollapsed` returns false whenever `userExpandedRef.current` is true.
+- **Root cause of stuttering:** MutationObserver fired on every DOM change, lineCountRef updated, but React state `lineCount` only synced every 500ms. Between syncs, `lineCount === 0` → "(0 lines)" flash.
+- **Root cause of Show More broken:** `setCollapsed(false)` was overridden on next re-render because `isCollapsed` recalculated with `lineCount === 0` → collapsed again.
+- **Before:** Code block flickered "0 lines" during streaming. "Show More" snapped back to collapsed immediately.
+- **After:** Line count stable (computed from prop). Expand state sticky until user manually collapses.
+
+**Change 2B: appStore.js `appendFileContentToken`** — Batched token accumulation.
+- Instead of calling `set()` on every token (100+/sec), tokens accumulate in `_fileTokenBuffer` and flush to state every 100ms via `setTimeout`.
+- `endFileContentBlock` flushes any pending buffer before marking complete.
+- `clearFileContentBlocks` clears any pending timer.
+- **Before:** ~100 Zustand `set()` calls/sec → 100 React re-renders/sec → stuttering.
+- **After:** ~10 Zustand `set()` calls/sec → smooth streaming.
+
+### Phase 3 — Empty text box fix (ChatPanel.jsx)
+
+**Change 3A:** Footer streaming text guard: `chatStreamingText && chatStreamingText.trim()` instead of just `chatStreamingText`.
+- **Before:** Whitespace-only text (e.g. trailing newlines from "Writing **filename**...\n") rendered an empty text area.
+- **After:** Empty/whitespace text suppressed.
+
+**Change 3B:** Finalization guard: `messageContent && messageContent.trim()` before adding assistant message.
+- **Before:** Could create empty assistant message bubble.
+- **After:** Empty messages suppressed.
+
+**Change 3C:** Bounce dots threshold: `!chatStreamingText && !chatThinkingText && streamingSegments.length === 0`.
+- **Before:** Bounce dots showed even when file blocks were actively streaming (no text but file content visible).
+- **After:** Bounce dots only show when nothing is streaming at all.
+
+### Phase 4 — Chronological ordering (appStore.js + ChatPanel.jsx)
+
+**Change 4A: appStore.js** — Added `streamingSegments: []` state field.
+- Each segment is `{type: 'text', content}` or `{type: 'file', index}` where `index` points into `streamingFileBlocks`.
+- `appendStreamToken` appends to last text segment or creates new one, preserving insertion order relative to file blocks.
+- `startFileContentBlock` pushes a file segment after any accumulated text.
+- `setChatStreaming(false)`, `clearFileContentBlocks`, and `clearChat` all clear segments.
+- **Root cause:** Previous architecture had `chatStreamingText` (single accumulated string) and `streamingFileBlocks[]` (array). Footer rendered ALL text THEN ALL files. No way to interleave text before/between/after file blocks.
+
+**Change 4B: ChatPanel.jsx Footer** — Renders `streamingSegments.map()` instead of separate text + files.
+- Text segments render as MarkdownRenderer. File segments render as FileContentBlock.
+- Streaming cursor shown after last text segment only.
+- **Before:** "Writing **filename**..." text above code block, then model's post-file text also above code block.
+- **After:** Content appears in chronological order: text → file block → text → file block.
+
+**Change 4C: ChatPanel.jsx finalization** — Composites from `streamingSegments` in order.
+- Iterates segments: text segments become markdown, file segments become fenced code blocks.
+- Fallback to old `chatStreamingText + streamingFileBlocks` if segments empty (defensive).
+- **Before:** Final message was always text-first, files-last.
+- **After:** Final message preserves chronological ordering.
+
+### Phase 5 — Web search (webSearch.js + server/main.js)
+
+**Change 5A:** Created `webSearch.js` — DuckDuckGo HTML scraping, no API key.
+- `search(query, maxResults)` → fetches `html.duckduckgo.com/html/?q=...`, parses result blocks for title/url/snippet.
+- `fetchPage(url)` → fetches URL, strips scripts/styles/tags, returns readable text. Capped at 15KB + 2MB response limit.
+- HTTP(S) with redirect following, timeout (10s), response size limit (2MB).
+- URL validation: only http/https protocols accepted.
+
+**Change 5B: server/main.js** — Wired WebSearch into MCPToolServer.
+- `const WebSearch = require('./webSearch'); const webSearch = new WebSearch();`
+- Passed `webSearch` to `MCPToolServer` constructor.
+- Updated ctx object from `webSearch: null` to `webSearch`.
+- **Before:** `mcpToolServer._webSearch()` returned `{success: false, error: 'Web search not available'}`.
+- **After:** Web search and page fetch are functional.
+
+---
+
+## 2026-03-29 — R32 FIX: 5 DEFECTS FROM R31 TEST 2 (2 files: agenticLoop.js, nativeContextStrategy.js)
+
+Root cause of 5 defects: rotationCheckpoint corruption cascade. In R31 test 2, iter 2's rotation protection blocked a write_file and nulled rotationCheckpoint. Iter 3's append_to_file succeeded on disk but couldn't update the checkpoint (null). Iter 4's write_file was blocked by MCP overwrite protection (returns { success: false } without throwing), but the checkpoint update code ran anyway because it's in the try block — setting checkpoint to 1871 chars of blocked content instead of the 22509 chars actually on disk. All subsequent T42 summaries showed wrong line count (101 vs 1011), causing model disorientation: paradigm shift (HTML→React), stuck loops (3x identical CHARTS), and structurally incomplete file (no `</html>`).
+
+### R32 Phase A — Fix rotationCheckpoint corruption (agenticLoop.js, 3 changes)
+
+**Change A1:** Rotation protection "skip" branch (~L1382) — removed `rotationCheckpoint = null`.
+- **Before:** When a write_file was blocked (content shorter than checkpoint), the checkpoint was nulled.
+- **After:** Checkpoint preserved. Blocking a write does not change what's on disk. Subsequent append_to_file calls can accumulate content correctly.
+
+**Change A2:** After rotation protection if/else block (~L1391) — removed `rotationCheckpoint = null`.
+- **Before:** After both "continuation" (write→append conversion) and "allow write" branches, checkpoint was nulled.
+- **After:** Checkpoint preserved. For continuation: the append checkpoint accumulation at ~L1540 correctly accumulates onto existing content. For allow: the checkpoint update at ~L1525 correctly updates when write succeeds.
+
+**Change A3:** R16-Fix-B checkpoint update (~L1522) — added `toolSucceeded` guard.
+- **Before:** Checkpoint updated unconditionally for write_file/create_file when `effectiveArgs?.content` was truthy. MCP overwrite protection returns `{ success: false }` WITHOUT throwing, so the try block continued and the checkpoint was set to the blocked content.
+- **After:** `const toolSucceeded = toolResult?.success !== false && !toolResult?.error;` checked before all checkpoint update branches. Failed writes log but do NOT modify checkpoint. Also added logging for failed tool write operations.
+- **Observable:** Log should show `R32-Fix Phase A: Tool write_file failed — checkpoint NOT updated` when MCP blocks a write. Checkpoint should maintain accurate content across iterations.
+
+### R32 Phase B — Pre-execution duplicate write blocking (agenticLoop.js, 1 change)
+
+**Change B1:** Added pre-execution duplicate check for write tools (~L1349, before rotation protection).
+- **What:** For write_file, create_file, append_to_file: compute paramsHash (first 400 chars of JSON.stringify), check against last 2 entries in recentToolSigs. If match found, skip execution and inject synthetic "Blocked: duplicate" result.
+- **Why:** Existing stuck/cycle detection at ~L1595 runs AFTER executeTool — duplicate writes hit disk BEFORE detection. Phase B catches them BEFORE execution.
+- **Also:** Blocked calls immediately push to recentToolSigs so duplicate calls within the SAME iteration batch are also caught.
+- **Observable:** Log should show `R32-Fix Phase B: Blocked duplicate append_to_file — identical to recent call` when model repeats same write content.
+
+### R32 Phase C — Structural context preservation (agenticLoop.js + nativeContextStrategy.js, 3 changes)
+
+**Change C1:** T42 file summary HEAD inclusion (nativeContextStrategy.js ~L188).
+- **Before:** T42 summary only preserved tail content (last N chars). Model lost awareness of file opening structure (DOCTYPE, `<html>`, `<head>`).
+- **After:** First 5 lines of file content (up to 200 chars, `headBudget`) included in T42 summary: `File starts with:\n${headText}\n...\nLast content written:\n${tail}`. Tail budget reduced by head size + 30 chars padding.
+- **Observable:** After context shift, model should see both the beginning and end of its file in the condensed summary. Prevents paradigm shifts (HTML→React) caused by losing structural awareness.
+
+**Change C2:** Structural completeness hints in R16-Fix-B non-salvage path (agenticLoop.js ~L1807).
+- **Before:** nextUserMessage asked model to "review whether ALL content is in the file" without specifying what "complete" means for the file type.
+- **After:** Detects file extension and adds type-specific hint: HTML must end with `</body></html>`, SVG with `</svg>`, XML with closing root tag, JSON with balanced brackets. Also includes first 5 lines (HEAD) of file alongside last 30 lines (tail) so model sees full structural bookends.
+- **Observable:** Model should produce structurally complete files (with closing tags) instead of stopping mid-content.
+
+**Change C3:** R14-Fix-2 contentStreamed guard (agenticLoop.js ~L1574).
+- **Before:** `contentStreamed = true` set unconditionally for all write_file/create_file entries with content, regardless of whether the tool succeeded.
+- **After:** Only set when `entry.result?.success !== false && !entry.result?.error`. Blocked/failed writes do NOT suppress CodeBlock rendering.
+- **Observable:** UI line count should match disk line count. When MCP blocks a write, the content block is still rendered so the user can see what was attempted.
+
+---
+
+## 2026-03-29 — R31 FIX: Fix-M PROSE INJECTION BUG (1 file: agenticLoop.js)
+
+Root cause: In R30 test (iter 4, completeness check), the model replied with prose "I have successfully created the interactive world atlas web app..." (926 chars, no tool call). Fix-M (T34) fired because:
+1. `rotationCheckpoint` was still set (T58-Fix-A set it in iter 3 but did not clear it)
+2. `looksLikeProse` regex did not match "I have successfully..." — only checked "I've", "Here's", "The file", etc.
+3. `codeChars >= 5` was true (prose contained `.`, `(`, `)` chars from "world-atlas.html (421 lines)")
+
+Result: Fix-M called `append_to_file` with the 926-char prose, which Smart HTML insert injected before `</html>` at line 1301. File was corrupted.
+
+Second defect: Model restarted file via append_to_file (`<!DOCTYPE html>` at L1046). R16-Fix-B reported "191 lines" (only iter 2's append) instead of "882 lines" (full file). Model thought HTML structure was missing.
+
+Third defect: JS appended after `</script>` without `<script>` wrapper. T42 tail showed only iter 2's JS, didn't include `</script>` boundary from iter 1.
+
+### R31 Change 1: T58-Fix-A complete path — null rotationCheckpoint (agenticLoop.js ~L1659)
+- **What changed:** After `stream.endFileContent()` in the T58-Fix-A "content COMPLETE" branch, added `rotationCheckpoint = null;`
+- **Why:** When T58-Fix-A confirms the file is structurally complete and closes it, there is no reason to keep rotationCheckpoint. Clearing it prevents Fix-M from conditional-triggering on the model's summary response in the next iteration.
+- **Observable:** Fix-M should NOT fire when model outputs summary prose after T58 closes the file. Log should NOT show "Fix-M (T34): Appended X chars" after file completion.
+
+### R31 Change 2: looksLikeProse regex expansion — REVERTED
+- **What changed:** Was expanded to match more phrases. User rejected as test-specific and fragile. Reverted to original.
+
+### R31 Change 3: Phase 1 — fileCompletionCheckPending flag (agenticLoop.js)
+- **Declared** `let fileCompletionCheckPending = false;` and `let fileRestartRetries = 0;` at ~L204
+- **Set true** in T58-Fix-A complete path (~L1663) after `stream.endFileContent()`
+- **Set true** in R16-Fix-B (R23) non-salvage path (~L1703) after setting nextUserMessage
+- **Guard added** in R16-Fix-C else block (~L1879) BEFORE Fix-M:
+  - If `fileCompletionCheckPending && toolCalls.length === 0`: null `rotationCheckpoint` and clear flag. Fix-M's existing `if (rotationCheckpoint && ...)` naturally fails.
+  - If `fileCompletionCheckPending && toolCalls.length > 0`: model is continuing, clear flag and proceed normally.
+- **Why:** State-based solution. No text-matching heuristics needed for Fix-M entry condition. When file completion is detected (T58-Fix-A or R16-Fix-B) and the model's next response has no tool calls (= summary prose), the checkpoint is nulled so Fix-M cannot inject prose.
+
+### R31 Change 4: Phase 2 — Accurate line count and tail from rotationCheckpoint (agenticLoop.js)
+- **T32-Fix incomplete branch** (~L1635): Moved checkpoint update BEFORE line count calculation. Uses `rotationCheckpoint.content` for `lineCount` and `tailLines` instead of just `writtenContent` (current iter's write).
+- **T58-Fix-A complete branch** (~L1655): Same — uses `rotationCheckpoint.content` for `lineCount`.
+- **R16-Fix-B (R23) non-salvage branch** (~L1678): Replaced `fileSummary` construction and `tailLines` extraction to prefer `rotationCheckpoint.content` when its `filePath` matches. Falls back to `toolResultEntries` when no checkpoint.
+- **Why:** R16-Fix-B was reporting only the current iteration's append lines (191), not the full accumulated file (882). The model saw "191 lines" and concluded it needed to write the missing HTML structure. Using rotationCheckpoint gives the full picture across all iterations.
+
+### R31 Change 5: Phase 3 — Head-of-file restart detection (agenticLoop.js ~L1435)
+- **Where:** After T58-Fix-B overlap detection, before `executeTool` call
+- **What:** When `append_to_file` is called on a file with an existing `rotationCheckpoint`, compare first 3 non-empty trimmed lines of append content vs first 3 non-empty trimmed lines of checkpoint content. If all 3 match → the model is restarting the file from the beginning.
+- **Action on detection:** Reject the tool call (do not execute). Set `nextUserMessage` to re-prompt with tail of existing file, telling model to continue after that point. Max 2 retries via `fileRestartRetries` counter. After 2 retries, allow append to proceed.
+- **Why:** Even with accurate line counts (Phase 2), a model post-rotation may still attempt to restart. This is a guard that catches the symptom and re-prompts correctly.
+
+### R30 Test Results
+- File: ~1309 lines, 3 context shifts, 3 iterations producing file content
+- Iter 1: write_file 691 lines. Iter 2: append_to_file +190 lines. Iter 3 (T58-Fix-A salvage): append_to_file +421 lines. File complete (ends in </body></html>)
+- Iter 4: completeness summary prose → Fix-M injected prose into HTML (R31 defect, now fixed)
+- R30 fixes working: embedded JSON detection fired at iters 2 and 3, T42 file summaries preserved, line count monotonically increased
+- **Defects from R30 test:** Fix-M prose injection, file restart via append, JS outside script — all addressed by R31 Phases 1-3
+
+---
+
+## 2026-03-29 — R30 INTER-ITERATION CONTEXT SHIFT FIX (1 file: nativeContextStrategy.js)
+
+Root cause: After context shift + salvage path at iter 1 end, T32-Fix injects a continuation message (user type) asking the model to use append_to_file. At iter 2 start, chatHistory = [system, user, model(24K), continuation_user(700)]. The 35K chatHistory exceeds 8K context, triggering another context shift via nativeContextShiftStrategy. Two bugs in the strategy caused the model to lose all file-writing awareness:
+
+1. `detectActiveFileGeneration()` only checked the LAST chatHistory item. At iter 2, last item = T32-Fix continuation (user type). Function returned null. The entire file-aware budget allocation (T21/T27-Fix) and T42-Fix content summary were skipped.
+
+2. `truncateModelItem()` R13-Fix-D1 used `startsWith('{"tool"')` to detect tool call JSON. The model's response was a single string segment starting with prose ("I'll create a complete interactive periodic table...") followed by the JSON tool call. `startsWith` failed because the segment starts with prose, not `{"tool"`. T42-Fix file content summary was never generated.
+
+Result: model at iter 2 saw truncated tail of its own response (raw JS ending with triple backticks = closing markdown fence) instead of a file content summary. Model interpreted backticks as "I just closed a code block" and output prose + new fence instead of append_to_file tool call. 102 chars, loop exited, file stayed incomplete at 432 lines.
+
+Cross-checked against REVERTED_FIXES.md — none of the 17 reverted fixes involve nativeContextStrategy.js or these detection functions. No conflict.
+
+### R30 Change 1: detectActiveFileGeneration() — scan backwards (nativeContextStrategy.js ~L288-320)
+- **What changed:** Function now iterates backwards through chatHistory to find the most recent `model` type entry, instead of only checking `chatHistory[chatHistory.length - 1]`. Also detects T42-Fix condensed summary format (`[I was writing "file" with write_file`).
+- **Why:** When chatHistory ends with a user continuation message (the normal case after T32-Fix), the old code returned null. The file-aware budget allocation and T42-Fix summary path were completely skipped.
+- **Observable:** `[NativeCtxShift] Active file generation: periodic-table.html` should appear in logs even when last item is a user continuation message. T21/T27-Fix budget allocation should fire.
+
+### R30 Change 2: truncateModelItem() — embedded JSON detection (nativeContextStrategy.js ~L107-150)
+- **What changed:** After existing `startsWith` checks, added fallback regex search for `{"tool":"write_file|..."` anywhere in string segments. When found mid-segment, splits at the JSON start: prose prefix added to prefixSegs, JSON portion passed to T42-Fix for file content extraction.
+- **Why:** The model commonly outputs prose intro text + JSON tool call in the same string segment. `startsWith` only found JSON at the very start. When prose preceded JSON (which is every time), T42-Fix never fired, and the model's 24K response was tail-truncated to raw JavaScript + backticks.
+- **Observable:** `[NativeCtxShift] R30-Fix: Found embedded tool call JSON at char X` and `[NativeCtxShift] T42-Fix/R28-2: Preserved file content summary for "..."` should appear in logs during inter-iteration context shifts.
+
+### R29 Test Results (completed before R30, for reference)
+- File on disk: 432 lines, 23812 bytes at `test-project/r29-test/periodic-table.html`
+- File structurally incomplete: no `</script>`, `</body>`, `</html>` tags
+- One context shift survived mid-generation (98%→71%, lines continued growing)
+- Language label correctly showed "HTML" during streaming (R29 fix working)
+- T32-Fix correctly detected incomplete file and injected continuation
+- Iter 2 failed: model output 102 chars of prose instead of append_to_file tool call
+- Root cause traced to two bugs in nativeContextStrategy.js (see above)
+
+### Files Modified:
+- `pipeline/nativeContextStrategy.js` — R30 (2 function changes)
+
+## 2026-03-29 — R29 SYSTEMATIC ESCAPED-QUOTE REGEX FIX (1 new file, 5 patched files)
+
+Root cause: Qwen3.5-2B (and potentially other small models) outputs tool call JSON with escaped quotes in keys: `\"filePath\":\"file.html\"` instead of `"filePath":"file.html"`. R28-1b patched 1 out of 38 regex locations. The remaining 37 were vulnerable, causing T44-Fix to retain only 20 chars (budget was 9630), content streaming to use wrong language label (PHP-TEMPLATE), and file extraction to fail at multiple pipeline stages.
+
+Cross-checked against REVERTED_FIXES.md — none of the 17 reverted fixes involved escaped-quote regex. No conflict.
+
+### R29: Created pipeline/regexHelpers.js (new file)
+- **Three helper functions** that try standard regex first, then escaped-quote variant:
+  - `matchFilePathInText(text)` — matches `"filePath":"..."` OR `\"filePath\":\"...\"`
+  - `matchContentStartInText(text)` — matches `"content":"` OR `\"content\":\"` (position only)
+  - `matchContentValueInText(text)` — matches `"content":"(value)` OR `\"content\":\"(value)` (with capture)
+- Standard patterns tried first for backward compatibility; escaped patterns act as fallback
+
+### R29: Patched pipeline/nativeContextStrategy.js (2 regex sites)
+- L127: `fpMatch` — replaced inline filePath regex with `matchFilePathInText(jsonSeg)`
+- L128: `contentMatch` — replaced inline content regex with `matchContentValueInText(jsonSeg)`
+- **Observable:** T42-Fix/R28-2 budget math at L144 now EXECUTES when model uses escaped quotes. T44-Fix log should show `tail=~8000` instead of 20 chars. Context summary should contain file path and line count.
+
+### R29: Patched pipeline/streamHandler.js (3 regex sites)
+- L261: `fpMatch` in `_streamFileContent` — replaced `FILE_PATH_RE` with `matchFilePathInText(json)`
+- L281: `contentMatch` for content-type sniffing — replaced inline regex with `matchContentStartInText(json)`
+- L510: `fpMatch` in `continueToolHold` — replaced `FILE_PATH_RE` with `matchFilePathInText(this._toolCallJson)`
+- **Observable:** `file-content-start` event should show actual filePath (not "unknown"), language should be "html" (not "text"), no PHP-TEMPLATE label.
+
+### R29: Patched pipeline/agenticLoop.js (15 regex sites)
+- Added `require('./regexHelpers')` import
+- Replaced all 13 `FILE_PATH_RE` usage sites with `matchFilePathInText()`:
+  - L363 (CONTEXT_OVERFLOW), L503 (non-file-tool save), L543 (non-file-tool continuation),
+  - L561/L563 (D6 new-tool-call detection), L780 (continuation checkpoint),
+  - L854 (eogToken checkpoint), L896 (braceDepth<=0 save), L934 (failed-tool-call save),
+  - L1021 (salvage path), L1192 (initial partial checkpoint), L1237 (timeout checkpoint)
+- Replaced 3 content-start regex sites with `matchContentStartInText()`:
+  - L373 (CONTEXT_OVERFLOW StreamHandler extraction), L1030 (T31-Fix salvage),
+  - L1115 (R28-1b StreamHandler extraction)
+- **Observable:** All checkpoint/salvage paths now succeed on escaped-quote model output. No more "R28-1b" fallback entries in logs (main salvage path handles it).
+
+### R29: Patched pipeline/continuationHandler.js (1 regex site)
+- L52: `contentMatch` — replaced inline content regex with `matchContentValueInText(taskContext.accumulatedBuffer)`
+- **Observable:** Continuation messages correctly count lines and extract tail even with escaped-quote JSON.
+
+### R29: Patched pipeline/responseParser.js (3 changes)
+- Added escaped-quote variants to `extractContentFromPartialToolCall` patterns array:
+  - `\\?"content\\?"\\s*:\\s*\\?"(content...)` after standard pattern
+  - `\\?"fileContent\\?"\\s*:\\s*\\?"(content...)` after standard fileContent pattern
+- Changed inner tool-wrapper guard test to handle escaped quotes: `\\?"tool\\?"\\s*:\\s*\\?"`
+- Changed inner content extraction to use `matchContentValueInText(content)`
+- **Observable:** `extractContentFromPartialToolCall` now succeeds on escaped-quote tool calls, returning content instead of null.
+
+### R28 Test Results (completed before R29, for reference)
+- File on disk: 214 lines, 15333 bytes at `test-project/r28-test/periodic-table.html`
+- 7 defects found — all traced to escaped-quote regex failures at unpatched locations
+- T44-Fix measured 20 chars (budget 9630) because nativeContextStrategy fpMatch/contentMatch returned null
+- Defects: T44 20-char truncation, literal `\n` in file, markdown fence in file, leading `/`, PHP-TEMPLATE label, naked code in chat, empty TEXT block
+
+### Files Modified:
+- `pipeline/regexHelpers.js` — NEW FILE (R29 helper functions)
+- `pipeline/nativeContextStrategy.js` — R29 (2 regex sites)
+- `pipeline/streamHandler.js` — R29 (3 regex sites)
+- `pipeline/agenticLoop.js` — R29 (15 regex sites + import)
+- `pipeline/continuationHandler.js` — R29 (1 regex site + import)
+- `pipeline/responseParser.js` — R29 (3 changes + import)
+
+---
+
 ## 2026-03-29 — R28 STRUCTURAL FIXES (3 phases, 3 files)
 
 Root cause: Two subsystems (StreamHandler and Parser) reached opposite conclusions about the same model output. StreamHandler said "this is write_file with HTML content" and streamed 461 lines to UI. Parser said "toolCalls=0" because JSON.parse failed on escaped quotes (`\"filePath\"`). Then `finalize(false)` dumped 26K chars of raw JSON on top of the already-displayed content. All 7 R27 test defects cascade from this.

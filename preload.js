@@ -20,4 +20,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   openFolderDialog: () => ipcRenderer.invoke('dialog-open-folder'),
   showItemInFolder: (fullPath) => ipcRenderer.invoke('shell-show-item', fullPath),
+  onMenuAction: (callback) => {
+    ipcRenderer.on('menu-action', (_event, action) => callback(action));
+  },
+  updater: {
+    check:     () => ipcRenderer.invoke('updater-check'),
+    download:  () => ipcRenderer.invoke('updater-download'),
+    install:   () => ipcRenderer.invoke('updater-install'),
+    getStatus: () => ipcRenderer.invoke('updater-status'),
+    onStatus:  (callback) => {
+      ipcRenderer.on('update-status', (_event, data) => callback(data));
+    },
+  },
 });

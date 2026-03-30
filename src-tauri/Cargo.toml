@@ -1,6 +1,6 @@
 [package]
 name = "guide-ide"
-version = "2.0.0"
+version = "2.1.0"
 description = "guIDE — Local-first AI IDE"
 authors = ["Brendan Gray"]
 edition = "2021"
