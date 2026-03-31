@@ -64,42 +64,13 @@ Module._resolveFilename = function (request, parent, isMain, options) {
   return originalResolveFilename.call(this, request, parent, isMain, options);
 };
 
-// Electron shim — written once on first run, skipped on subsequent starts
+// Electron shim — static file included in the package (server/_electronShim.js)
 const shimPath = path.join(__dirname, '_electronShim.js');
 
-// Write the shim — it exports our bridge instances via a global reference
-// We store references on global so the shim can access them
+// Set up globals so the static shim file can reference them
 global.__guideIpcMain = ipcMain;
 global.__guideMainWindow = mainWindow;
 global.__guideApp = appBridge;
-
-const shimCode = `
-'use strict';
-module.exports = {
-  ipcMain: global.__guideIpcMain,
-  app: global.__guideApp,
-  BrowserWindow: {
-    getAllWindows: () => [global.__guideMainWindow],
-    getFocusedWindow: () => global.__guideMainWindow,
-  },
-  dialog: {
-    showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
-    showSaveDialog: async () => ({ canceled: true, filePath: '' }),
-    showMessageBox: async () => ({ response: 0 }),
-  },
-  shell: {
-    openExternal: (url) => { console.log('[Shell] openExternal:', url); },
-    openPath: (p) => { console.log('[Shell] openPath:', p); },
-  },
-  Menu: { buildFromTemplate: () => ({}), setApplicationMenu: () => {} },
-  Tray: class { constructor() {} },
-  nativeTheme: { shouldUseDarkColors: true, themeSource: 'dark' },
-  screen: { getPrimaryDisplay: () => ({ workAreaSize: { width: 1920, height: 1080 } }) },
-};
-`;
-if (!fs.existsSync(shimPath)) {
-  fs.writeFileSync(shimPath, shimCode, 'utf8');
-}
 
 // ─── Now load pipeline modules (they will get our Electron shim) ──
 console.log('[Server] Loading pipeline modules...');

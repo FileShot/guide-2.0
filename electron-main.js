@@ -22,16 +22,20 @@ const { AutoUpdater } = require('./autoUpdater');
 // Shown immediately while the backend subprocess starts up.
 // Replaced with the real app URL as soon as /api/health responds.
 const LOADING_HTML = `<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><style>
+<html><head><meta charset="UTF-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Audiowide&display=swap" rel="stylesheet">
+<style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body {
   height: 100%; background: #0d0d0d; color: #e5e7eb;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: 'Audiowide', 'Courier New', monospace;
   display: flex; align-items: center; justify-content: center;
   flex-direction: column; gap: 20px;
   -webkit-app-region: drag; user-select: none;
 }
-.logo { font-size: 26px; font-weight: 700; letter-spacing: 1px; color: #fff; }
+.logo { font-size: 26px; font-weight: 400; letter-spacing: 2px; color: #fff; }
 .logo span { color: #4f9cf9; }
 .spinner {
   width: 28px; height: 28px;
@@ -39,11 +43,18 @@ html, body {
   border-radius: 50%; animation: spin 0.75s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
-.sub { font-size: 12px; color: #4b5563; }
+.sub { font-size: 12px; color: #4b5563; font-family: -apple-system, sans-serif; }
+.err {
+  font-size: 11px; color: #f87171; max-width: 460px; padding: 10px 14px;
+  background: #1c0a0a; border: 1px solid #7f1d1d; border-radius: 6px;
+  font-family: monospace; white-space: pre-wrap; word-break: break-all;
+  display: none; -webkit-app-region: no-drag;
+}
 </style></head><body>
   <div class="logo">gu<span>IDE</span></div>
-  <div class="spinner"></div>
-  <div class="sub">Starting…</div>
+  <div class="spinner" id="sp"></div>
+  <div class="sub" id="st">Starting…</div>
+  <div class="err" id="er"></div>
 </body></html>`;
 
 // ─── GPU / V8 flags (match old IDE) ─────────────────────────────────
@@ -108,16 +119,28 @@ function startBackend(port) {
   serverProcess = fork(serverScript, [], {
     env: { ...process.env, GUIDE_PORT: String(port), PORT: String(port) },
     cwd: serverBase,
-    silent: false,
+    silent: true, // capture stdout/stderr so we can show crash messages
+  });
+
+  // Pipe backend stdout to Electron's stdout (visible in dev)
+  serverProcess.stdout.on('data', (d) => process.stdout.write(d));
+
+  // Capture backend stderr — show crash details in the loading screen
+  serverProcess.stderr.on('data', (data) => {
+    const msg = data.toString();
+    process.stderr.write(msg);
+    _showBackendError(msg);
   });
 
   serverProcess.on('exit', (code, signal) => {
     console.log('[Electron] Backend exited:', code, signal);
     serverProcess = null;
+    if (code !== 0) _showBackendError(`Backend exited with code ${code} (${signal || 'no signal'})`);
   });
 
   serverProcess.on('error', (err) => {
     console.error('[Electron] Backend error:', err.message);
+    _showBackendError(err.message);
   });
 }
 
@@ -162,6 +185,24 @@ function createWindow(port) {
     shell.openExternal(url);
     return { action: 'deny' };
   });
+}
+
+// ─── Backend error UI ──────────────────────────────────────────────────
+// Shows crash details in the loading screen so users aren't left with silence.
+function _showBackendError(msg) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  // Only inject if the loading screen is still shown (not yet navigated away)
+  mainWindow.webContents.executeJavaScript(`
+    var er = document.getElementById('er');
+    var sp = document.getElementById('sp');
+    var st = document.getElementById('st');
+    if (er) {
+      er.textContent = ${JSON.stringify(String(msg).substring(0, 800))};
+      er.style.display = 'block';
+    }
+    if (sp) sp.style.display = 'none';
+    if (st) st.textContent = 'Backend failed to start';
+  `).catch(() => {});
 }
 
 // ─── Window control IPC ─────────────────────────────────────────────
