@@ -18,6 +18,34 @@ const net = require('net');
 const { buildAppMenu } = require('./appMenu');
 const { AutoUpdater } = require('./autoUpdater');
 
+// ─── Loading screen ──────────────────────────────────────────────────
+// Shown immediately while the backend subprocess starts up.
+// Replaced with the real app URL as soon as /api/health responds.
+const LOADING_HTML = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+  height: 100%; background: #0d0d0d; color: #e5e7eb;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  display: flex; align-items: center; justify-content: center;
+  flex-direction: column; gap: 20px;
+  -webkit-app-region: drag; user-select: none;
+}
+.logo { font-size: 26px; font-weight: 700; letter-spacing: 1px; color: #fff; }
+.logo span { color: #4f9cf9; }
+.spinner {
+  width: 28px; height: 28px;
+  border: 3px solid #2a2a2a; border-top-color: #4f9cf9;
+  border-radius: 50%; animation: spin 0.75s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.sub { font-size: 12px; color: #4b5563; }
+</style></head><body>
+  <div class="logo">gu<span>IDE</span></div>
+  <div class="spinner"></div>
+  <div class="sub">Starting…</div>
+</body></html>`;
+
 // ─── GPU / V8 flags (match old IDE) ─────────────────────────────────
 app.commandLine.appendSwitch('disable-gpu-sandbox');
 app.commandLine.appendSwitch('ignore-gpu-blocklist');
@@ -116,7 +144,8 @@ function createWindow(port) {
     },
   });
 
-  mainWindow.loadURL(`http://localhost:${port}`);
+  // Show loading screen immediately — backend may not be ready yet
+  mainWindow.loadURL('data:text/html,' + encodeURIComponent(LOADING_HTML));
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
@@ -171,16 +200,26 @@ app.whenReady().then(async () => {
 
   startBackend(serverPort);
 
-  try {
-    await waitForBackend(serverPort);
-    console.log('[Electron] Backend ready on port', serverPort);
-  } catch (e) {
-    console.error('[Electron] Backend did not respond:', e.message);
-    // Still create window — server may have started even if health check timed out
-  }
-
+  // Show window IMMEDIATELY with loading screen — do not wait for backend.
+  // Waiting for the backend before creating the window caused a multi-minute black
+  // screen on first install because AV scans every file in app.asar.unpacked.
   createWindow(serverPort);
   buildAppMenu(mainWindow);
+
+  // Poll backend async (up to 2 min for AV-scanned first runs).
+  // When ready, navigate to the real app URL.
+  waitForBackend(serverPort, 480).then(() => {
+    console.log('[Electron] Backend ready on port', serverPort);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.loadURL(`http://localhost:${serverPort}`);
+    }
+  }).catch((e) => {
+    console.error('[Electron] Backend startup timeout:', e.message);
+    // Try loading anyway — server may have started even if health check timed out
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.loadURL(`http://localhost:${serverPort}`);
+    }
+  });
 
   // Auto-updater — check for updates after launch
   const updater = new AutoUpdater(mainWindow, { autoDownload: false });

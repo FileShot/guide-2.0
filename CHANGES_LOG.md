@@ -4,6 +4,39 @@
 
 ---
 
+## 2026-03-31 — Startup Performance: Immediate Loading Screen + Lazy Module Loads
+
+### Symptom
+3-minute black screen on launch after fresh install. Root cause: three compounding issues.
+
+### Root Cause 1 — Window only created AFTER backend health check timed out (15s)
+- `app.whenReady()` called `await waitForBackend()` (15s max) BEFORE `createWindow()`
+- On first install, Windows Defender scans every file in `app.asar.unpacked` on first access
+- Backend takes > 15s → window created connecting to a URL that still doesn't respond
+- `ready-to-show` fires on error page → user sees black (`backgroundColor: #0d0d0d`) for minutes
+
+### Root Cause 2 — `fs.writeFileSync(shimPath)` ran unconditionally every startup
+- Wrote the Electron shim file on EVERY launch, even when the file already existed
+- Writing to `C:\Program Files\guIDE\resources\app.asar.unpacked\server\` on every run
+
+### Root Cause 3 — `require('node-pty')` ran at server startup
+- Native module loaded eagerly even when no terminal was ever opened
+
+### Fixes
+
+#### `electron-main.js`
+- Added `LOADING_HTML` constant: dark (#0d0d0d) loading screen with spinner and "Starting…" text
+- `createWindow()` now loads the `data:text/html,<LOADING_HTML>` URL instead of the backend URL
+- `app.whenReady()`: removed `await waitForBackend()` gating — window shown IMMEDIATELY
+- Backend polled async (`waitForBackend(serverPort, 480)` = up to 2 min); when ready, `mainWindow.loadURL('http://localhost:PORT')` navigates to the real app
+- Result: user sees a styled loading screen within ~1 second; real app loads when backend is ready
+
+#### `server/main.js`
+- Shim write: `fs.writeFileSync(shimPath)` now wrapped in `if (!fs.existsSync(shimPath))` — skip on all runs after first
+- `require('node-pty')` deferred: replaced eager load with `_loadPty()` lazy function called only when user opens a terminal
+
+---
+
 ## 2026-03-31 — Fix: appMenu.js and autoUpdater.js missing from installer build
 
 ### Symptom

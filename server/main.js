@@ -64,11 +64,8 @@ Module._resolveFilename = function (request, parent, isMain, options) {
   return originalResolveFilename.call(this, request, parent, isMain, options);
 };
 
-// Create the electron shim module file if it doesn't exist
+// Electron shim — written once on first run, skipped on subsequent starts
 const shimPath = path.join(__dirname, '_electronShim.js');
-if (!fs.existsSync(shimPath)) {
-  // This will be created below — we write it synchronously before any pipeline require()
-}
 
 // Write the shim — it exports our bridge instances via a global reference
 // We store references on global so the shim can access them
@@ -100,7 +97,9 @@ module.exports = {
   screen: { getPrimaryDisplay: () => ({ workAreaSize: { width: 1920, height: 1080 } }) },
 };
 `;
-fs.writeFileSync(shimPath, shimCode, 'utf8');
+if (!fs.existsSync(shimPath)) {
+  fs.writeFileSync(shimPath, shimCode, 'utf8');
+}
 
 // ─── Now load pipeline modules (they will get our Electron shim) ──
 console.log('[Server] Loading pipeline modules...');
@@ -927,13 +926,17 @@ transport.start();
 
 // ─── PTY Terminal WebSocket ──────────────────────────────
 const WebSocket = require('ws');
-let pty;
-try {
-  pty = require('node-pty');
-  console.log('[Server] node-pty loaded — real terminal support enabled');
-} catch (e) {
-  console.warn('[Server] node-pty not available — terminal will use exec fallback');
-  pty = null;
+let pty = undefined; // undefined = not yet attempted; null = attempted but unavailable
+function _loadPty() {
+  if (pty !== undefined) return pty;
+  try {
+    pty = require('node-pty');
+    console.log('[Server] node-pty loaded — real terminal support enabled');
+  } catch (e) {
+    console.warn('[Server] node-pty not available — terminal will use exec fallback');
+    pty = null;
+  }
+  return pty;
 }
 
 const ptyTerminals = new Map(); // terminalId -> { pty, ws }
@@ -960,10 +963,11 @@ ptyWss.on('connection', (ws) => {
 
     if (msg.type === 'create') {
       termId = msg.terminalId || `pty-${Date.now()}`;
-      if (pty) {
+      const ptyModule = _loadPty(); // lazy-load native module on first terminal open
+      if (ptyModule) {
         const shell = process.platform === 'win32' ? 'powershell.exe' : (process.env.SHELL || '/bin/bash');
         const cwd = ctx.currentProjectPath || process.cwd();
-        ptyProcess = pty.spawn(shell, [], {
+        ptyProcess = ptyModule.spawn(shell, [], {
           name: 'xterm-256color',
           cols: msg.cols || 80,
           rows: msg.rows || 24,
