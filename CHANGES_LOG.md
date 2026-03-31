@@ -4,6 +4,39 @@
 
 ---
 
+## 2026-03-31 — Fix: appMenu.js and autoUpdater.js missing from installer build
+
+### Symptom
+Installed app crashed on launch: "Cannot find module './appMenu'" in electron-main.js line 18.
+
+### Root Cause
+`appMenu.js` and `autoUpdater.js` were required by `electron-main.js` but omitted from the `files` array in both `electron-builder.nosign.json` and `electron-builder.nosign.cuda.json`. They were never packaged into the ASAR.
+
+### Fix
+- **electron-builder.nosign.json:** Added `"appMenu.js"` and `"autoUpdater.js"` to files array (after `electron-main.js`)
+- **electron-builder.nosign.cuda.json:** Same addition
+
+---
+
+## 2026-03-31 — v2.2.0 Release: GitHub Actions + Live Site Deployment
+
+### Release v2.2.0
+- **package.json:** Bumped version 2.1.0 → 2.2.0
+- **Git tag:** `v2.2.0` pushed to `origin` → triggered GitHub Actions build
+- **GitHub Actions workflow:** `.github/workflows/build.yml` — builds 5 variants:
+  - `windows-cpu` → `guIDE-2.2.0-cpu-x64-setup.exe`
+  - `windows-cuda` → `guIDE-2.2.0-cuda-x64-setup.exe`
+  - `linux-cpu` → `guIDE-2.2.0-cpu-linux-x64.AppImage`
+  - `linux-cuda` → `guIDE-2.2.0-cuda-linux-x64.AppImage`
+  - `mac-cpu` → `guIDE-2.2.0-cpu-mac-{x64,arm64}.dmg`
+- **Live site:** `graysoft.dev/download` updated to show v2.2.0 download links
+  - Updated `CURRENT_VERSION` in `C:\Users\brend\IDE\website\src\app\download\page.tsx`
+  - Rebuilt website on server via control plane `/pm2/rebuild/graysoft`
+  - PM2 process `graysoft` restarted at 14:00:29 UTC
+  - Live verified: `https://graysoft.dev/download` → STATUS 200, version 2.2.0, correct download URLs
+
+---
+
 ## 2026-03-31 — R46: 6 Bug Fixes (6 files, 6 changes)
 
 ### Fix A: Model name display — show actual model name instead of "guIDE"
