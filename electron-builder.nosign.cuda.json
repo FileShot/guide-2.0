@@ -55,31 +55,6 @@
     "artifactName": "guIDE-${version}-cuda-x64-setup.${ext}"
   },
   "asar": false,
-  "_asarUnpack_disabled": [
-    "server/**/*",
-    "pipeline/**/*",
-    "tools/**/*",
-    "frontend/dist/**/*",
-    "agenticChat.js",
-    "agenticChatHelpers.js",
-    "constants.js",
-    "llmEngine.js",
-    "logger.js",
-    "longTermMemory.js",
-    "mcpToolServer.js",
-    "memoryStore.js",
-    "model-config.json",
-    "modelDetection.js",
-    "modelManager.js",
-    "modelProfiles.js",
-    "pathValidator.js",
-    "sanitize.js",
-    "sessionStore.js",
-    "node_modules/node-llama-cpp/**",
-    "node_modules/@node-llama-cpp/**",
-    "node_modules/node-pty/**",
-    "node_modules/better-sqlite3/**"
-  ],
   "mac": {
     "icon": "build/icon.icns",
     "target": [
