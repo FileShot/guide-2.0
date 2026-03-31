@@ -4,6 +4,40 @@
 
 ---
 
+## 2026-03-31 — v2.2.4: Backend never started in installed builds + Audiowide font + crash visibility
+
+### Root Causes (3 compounding bugs — app never worked when installed)
+
+**Cause 1 — 9 root-level JS modules missing from `files` array**
+- `cloudLLMService.js`, `settingsManager.js`, `gitManager.js`, `browserManager.js`, `firstRunSetup.js`, `ragEngine.js`, `accountManager.js`, `licenseManager.js`, `webSearch.js` were all absent from the `files` array in both builder configs
+- None of these were packaged into the installer — backend crashed on first `require()` before writing any log entry
+
+**Cause 2 — `asar: true` made the path resolution wrong**
+- Forked backend process ran with `ROOT_DIR = app.asar.unpacked`
+- `require(ROOT_DIR + '/cloudLLMService')` resolved to `app.asar.unpacked\cloudLLMService.js` — file not found there (only inside the ASAR)
+- Even if files were added, the `fork()`'d child process can't consistently resolve requires through the ASAR when the absolute path points to the `.unpacked` directory
+
+**Cause 3 — Backend errors were invisible**
+- `fork({ silent: false })` sent stderr to Electron's parent stdout — no console window in production, errors went nowhere
+- User saw only a black screen / stuck loading spinner with no indication of what failed
+
+### Fixes
+
+**`electron-builder.nosign.json` + `electron-builder.nosign.cuda.json`:**
+- `"asar": false` — all files extracted to flat `app/` directory, fork'd process resolves all `require()` via normal filesystem, no ASAR path complications
+- `"*.js"` and `"*.json"` wildcards in `files` array — all current and future root-level JS files are automatically packaged; removed redundant individual listings
+- Removed `asarUnpack` (irrelevant when `asar: false`)
+
+**`electron-main.js`:**
+- Fork changed to `silent: true` — stdout/stderr captured explicitly
+- Backend stderr piped to `_showBackendError()` — if crash occurs, error message appears in loading screen
+- Loading screen updated: Audiowide font via Google Fonts, error display `<div>` added
+
+**`server/main.js`:**
+- Removed dynamic shim write (`fs.writeFileSync(shimPath, shimCode)`) — static `_electronShim.js` file in package is sufficient, writing to `C:\Program Files\` was wrong anyway
+
+---
+
 ## 2026-03-31 — Startup Performance: Immediate Loading Screen + Lazy Module Loads
 
 ### Symptom
