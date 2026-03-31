@@ -4,6 +4,251 @@
 
 ---
 
+## 2026-03-31 — R46: 6 Bug Fixes (6 files, 6 changes)
+
+### Fix A: Model name display — show actual model name instead of "guIDE"
+- **Files:** `frontend/src/components/ChatPanel.jsx`
+- **Changed:** StreamingFooter header (L220) and finalized message label (L715) — replaced hardcoded "guIDE" with dynamic `modelInfo?.name` split to remove path/quantization suffix. Added `modelInfo` subscription to StreamingFooter. Finalized assistant messages now include `model` field for history display.
+
+### Fix B: HTML preview in viewport instead of external browser
+- **Files:** `frontend/src/components/EditorArea.jsx`, `frontend/src/components/Sidebar.jsx`, `frontend/src/stores/appStore.js`
+- **Changed:** EditorArea play button now toggles `previewMode` (uses existing HtmlPreview component) instead of `window.open`. Sidebar play button now opens file as tab then sets `previewRequested` flag. Added `previewRequested`/`setPreviewRequested` to appStore. EditorArea watches `previewRequested` to auto-activate preview mode on newly opened tab.
+
+### Fix C: Browser panel opens as editor tab instead of sidebar
+- **Files:** `frontend/src/components/EditorArea.jsx`, `frontend/src/components/ActivityBar.jsx`, `frontend/src/stores/appStore.js`
+- **Changed:** Added `openBrowserTab()` action to appStore that creates a `type: 'browser'` tab. EditorArea renders `<BrowserPanel />` when active tab is browser type, with Globe icon in tab. ActivityBar now calls `openBrowserTab()` instead of `setActiveActivity('browser')`.
+
+### Fix D: Restore checkpoints — implemented (was stub)
+- **File:** `frontend/src/components/ChatPanel.jsx`
+- **Changed:** Checkpoint `onClick` at L693 — replaced `{/* stub */}` with `useAppStore.setState({ chatMessages: chatMessages.slice(0, idx) })` to truncate conversation to that checkpoint, plus `setChatStreaming(false)` to clear streaming state.
+
+### Fix E: Thinking budget increase for Qwen small tier
+- **File:** `modelProfiles.js`
+- **Changed:** `qwen.small._thinkBudgetWhenActive` from 256 to 2048. Qwen3.5-2B IS a reasoning model and needs sufficient thinking token budget.
+
+### Fix F: Diagnostic thinking budget log
+- **File:** `llmEngine.js`
+- **Changed:** Added `console.log` after `budgets.thoughtTokens` is set in `_runGeneration()`, showing `thoughtTokenBudget` and `budgets.thoughtTokens` values. Helps verify the thinking pipeline is actually passing the budget to node-llama-cpp.
+
+### Fix G: Token buffer flush before finalization (truncation bug)
+- **File:** `frontend/src/components/ChatPanel.jsx`
+- **Changed:** In `doSend` finalization, added explicit flush of `_textTokenBuffer` into `streamingSegments` BEFORE reading segments to compose the finalized message. Without this, the last tokens (stuck in the 80ms batch timer) are dropped from the finalized message — causing responses that appear truncated (e.g. "Hello! How can I" instead of "Hello! How can I help you today?"). The buffer flush in `setChatStreaming(false)` happened too late — after the message was already composed.
+
+---
+
+## 2026-03-31 — R45: ThinkingBlock + TodoPanel UI Upgrade (1 file, 5 changes)
+
+### Change A: Add icon imports
+- **File:** `frontend/src/components/ChatPanel.jsx` L12-16
+- **Added:** `CheckCircle2`, `Circle`, `Loader2`, `ListTodo` from lucide-react
+- **Why:** TodoPanel and ThinkingBlock upgrades need proper status icons matching old IDE style
+
+### Change B: Upgrade ThinkingBlock in StreamingFooter
+- **File:** `frontend/src/components/ChatPanel.jsx` StreamingFooter component
+- **Removed:** Basic `<pre>` block with Brain icon, simple "Thinking..." label
+- **Added:** VS Code-style thinking block with:
+  - Elapsed time tracking (useRef for start time, "Reasoning..." while live, "Thought for Xs" after)
+  - Rotating triangle (&#9654;) instead of chevron
+  - Loader2 spinner while live, green Check when complete
+  - Auto-expand when thinking starts, auto-scroll content during streaming
+  - 10px font, muted color, max-height 180px with overflow scroll
+- **Why:** Match old IDE's ThinkingBlock (ChatWidgets.tsx L101-169)
+
+### Change C: Upgrade todos in StreamingHeader
+- **File:** `frontend/src/components/ChatPanel.jsx` StreamingHeader component
+- **Removed:** Simple colored dots for todo status, basic "Task Progress" label
+- **Added:** Full status icons (CheckCircle2/Loader2/Circle), progress bar, "Plan"/"Plan complete" label, 
+  active item color (#dcdcaa), strikethrough + reduced opacity for done items, ListTodo icon
+- **Why:** Match old IDE's TodoPanel.tsx style
+
+### Change D: Upgrade TodoDropdown (above input area)
+- **File:** `frontend/src/components/ChatPanel.jsx` TodoDropdown component
+- **Removed:** Basic "Tasks" label, colored dots, simple progress bar
+- **Added:** VS Code-style with:
+  - ListTodo icon with color (green when all done, accent otherwise)
+  - Active task text shown in collapsed header (#dcdcaa color, truncated to 42 chars)
+  - "Plan"/"Plan complete" labels
+  - Same icon set (CheckCircle2/Loader2/Circle) for items
+  - Scrollable expanded list (max-height 150px)
+- **Why:** Match old IDE's TodoPanel.tsx (L1-115)
+
+### Change E: Persist thinking text to finalized messages
+- **File:** `frontend/src/components/ChatPanel.jsx`
+- **Added:** `FinalizedThinkingBlock` component (module-level, before StreamingHeader)
+  - Collapsed by default (unlike streaming version which auto-expands)
+  - Shows "Thought for N lines" with green Check
+  - Same rotating triangle expand/collapse
+  - 180px max-height with scroll
+- **Added:** `thinkingText` capture in doSend finalization (before setChatStreaming(false) clears it)
+- **Added:** `thinking` property on addChatMessage call
+- **Added:** `{msg.thinking && <FinalizedThinkingBlock text={msg.thinking} />}` in message renderer
+- **Why:** Thinking was only visible during streaming, lost after completion. Now persisted in message history.
+
+---
+
+## 2026-03-31 — R44: Multiple Code Blocks + Stuttering + Scroll Reset (3 files, 3 fixes)
+
+### Fix 1: Remove mid-loop endFileContent() calls (RC-1 — multiple code blocks)
+- **File:** `pipeline/agenticLoop.js` L1869 (T58-Fix-A path), L1992 (R35-L1b path)
+- **REMOVED:** `stream.endFileContent()` at both locations
+- **KEPT:** Loop-exit `stream.endFileContent()` calls at ~L2356 and ~L2372 (natural completion + max iterations) — these are correct cleanup
+- **Root Cause:** When a file was structurally complete mid-loop (either via salvage+natural or post-context-shift), `endFileContent()` was called immediately. This killed `_fileContentActive` on the StreamHandler. In the NEXT iteration (model's summary response or completion check), any tokens routed through StreamHandler created a NEW FileContentBlock because `_fileContentActive` was false. Result: 4-5 code blocks for a single file, "Writing index.html..." repeated, content leaking between blocks.
+- **Effect:** `_fileContentActive` survives across iterations. Only the final loop exit cleans up the file content block. One file = one FileContentBlock throughout the entire generation lifecycle.
+
+### Fix 2: Stable Footer/Header components for Virtuoso (RC-2 — stuttering + scroll reset)
+- **File:** `frontend/src/components/ChatPanel.jsx`
+- **REMOVED:** Inline arrow functions `Header: () => (...)` and `Footer: () => (...)` inside Virtuoso's `components={{}}` prop
+- **ADDED:** Module-level `StreamingHeader` and `StreamingFooter` function components (defined before `ChatPanel`)
+- **CHANGED:** `components={{ Header: StreamingHeader, Footer: StreamingFooter }}` — stable function references
+- **MOVED:** `thinkingExpanded` state from ChatPanel into StreamingFooter (the only consumer)
+- **Root Cause:** Every 80ms during streaming, Zustand token batching triggered ChatPanel re-render. The inline `() => (...)` functions created new function references every render. Virtuoso treats new function references as new components — it unmounts the old Footer and mounts a new one. This destroyed all child component state: CodeBlock's MutationObserver + setInterval timers, FileContentBlock's scroll position, click handlers. Result: code block stuttering/glitching, scroll position resetting to top, "Show More" button not working (click handler lost on remount).
+- **Effect:** StreamingHeader and StreamingFooter are stable module-level functions. Virtuoso never unmounts them. They subscribe to store state directly via `useAppStore()` hooks, so they re-render when data changes (correct behavior) but are never destroyed/recreated.
+
+### Fix 3: Allow scrolling on completed FileContentBlocks (minor — Show More)
+- **File:** `frontend/src/components/chat/FileContentBlock.jsx` — `contentStyle`
+- **CHANGED:** `overflowY: complete ? 'hidden' : 'auto'` to `overflowY: 'auto'` (always scrollable)
+- **Root Cause:** Completed collapsed blocks used `overflowY: 'hidden'`, preventing user from scrolling content. Combined with Fix 2's remount issue, the "Show More" expand button also lost its click handler.
+- **Effect:** Both streaming and completed blocks allow vertical scrolling in the collapsed view.
+
+---
+
+## 2026-03-30 — R43: React Error #185 Crash Fix + StreamingErrorBoundary (2 files)
+
+### Fix A: Sanitize children at HAST→React boundary (prevents Error #185)
+- **File:** `frontend/src/components/chat/MarkdownRenderer.jsx` L15-39 (new `sanitizeChildren` fn), L60 (call in `code` component)
+- **ADDED:** `sanitizeChildren()` function that recursively validates React children. If any child is a plain JS object (not string/number/React element/null/undefined/boolean/array), converts it to its string representation.
+- **Root Cause:** During streaming, rapidly changing markdown content is processed by ReactMarkdown + rehype-highlight + rehype-katex. Occasionally the HAST-to-JSX conversion (hast-util-to-jsx-runtime) produces plain JS objects ({type:'text', value:'...'}) instead of React elements. React 19's strict child validation throws Error #185 ("Objects are not valid as a React child") when these reach `<code>{children}</code>`.
+- **CHANGED:** Both paths in the `code` component (CodeBlock and inline code) now use `safeChildren = sanitizeChildren(children)` instead of raw `children`.
+- **Effect:** Objects from failed HAST conversion are safely converted to strings. Error #185 no longer triggers from rehype pipeline edge cases.
+
+### Fix B: Streaming-scoped ErrorBoundary (prevents app-wide crash)
+- **File:** `frontend/src/components/ChatPanel.jsx` L16-50 (new `StreamingErrorBoundary` class), L491-494 (wrapped MarkdownRenderer)
+- **ADDED:** `StreamingErrorBoundary` class component with getDerivedStateFromError + componentDidCatch. On error: shows raw text content as `<pre>` fallback. Auto-recovers on next content update (componentDidUpdate checks if fallbackContent prop changed → clears error state).
+- **CHANGED:** MarkdownRenderer in the streaming Footer's text segments is now wrapped with `<StreamingErrorBoundary fallbackContent={seg.content}>`.
+- **Root Cause:** The existing app-level ErrorBoundary catches ALL errors and shows a full-screen crash page. A render error in one streaming segment during generation should NOT destroy the entire app — it should degrade gracefully and try again on the next content update.
+- **Effect:** If MarkdownRenderer crashes during streaming, the affected segment shows raw text instead. The app stays functional. On next content update, it auto-recovers and tries markdown rendering again.
+
+### Fix D: Don't override thinking budget when 0 (auto) — thinking was completely disabled
+- **File:** `pipeline/agenticLoop.js` L128-130
+- **CHANGED:** Condition from `if (context?.params?.thinkingBudget !== undefined)` to `if (context?.params?.thinkingBudget)` (truthy check)
+- **Root Cause:** Frontend defaults `thinkingBudget` to 0 (documented as "auto"). The old condition `!== undefined` evaluated to true for 0, overriding llmEngine's profile default (2048) with 0. Then llmEngine passed `budgets.thoughtTokens = 0` to node-llama-cpp, completely disabling thinking. Reasoning models like Qwen3.5 were running with zero thought budget.
+- **Effect:** When `thinkingBudget` is 0 (auto), the override is skipped. llmEngine's profile-based default (2048) or model-specific detection takes effect. Non-zero values (-1 unlimited, >0 specific) still override as intended.
+
+### Fix E: Default thinking display to expanded
+- **File:** `frontend/src/components/ChatPanel.jsx` — `thinkingExpanded` state
+- **CHANGED:** `useState(false)` to `useState(true)`
+- **Root Cause:** Even if thinking tokens were generated, the thinking section was collapsed by default. User had to click "Thinking..." button to see the reasoning output. User expects it visible by default like VS Code.
+- **Effect:** Thinking output is immediately visible during streaming without requiring user interaction.
+
+---
+
+## 2026-03-30 — R42: Naked Code Leak + File-Op ToolCallCard Regression (3 files, 4 fixes)
+
+### Fix 1: resolveSuspense(false) stops killing _fileContentActive (naked code root cause)
+- **File:** `pipeline/streamHandler.js` L641-650 — `resolveSuspense()`
+- **REMOVED:** The `if (this._fileContentActive)` block inside `resolveSuspense(false)` that sent `file-content-end` and cleared `_fileContentActive` and `_fileContentFilePath`
+- **Root Cause:** When `resolveSuspense(false)` ran (suspended content classified as text), it killed `_fileContentActive`. All subsequent tokens from the still-generating file then routed through `_flush()` as `llm-token` events, appearing as raw CSS/JS in the chat panel instead of inside FileContentBlock.
+- **Effect:** `_fileContentActive` survives across suspense resolution. The agenticLoop's `endFileContent()` is the only code path that terminates file content blocks.
+
+### Fix 2: finalize(false) respects _keepFileContentAlive flag
+- **File:** `pipeline/streamHandler.js` L34 (constructor), L426 (`finalize()`)
+- **ADDED:** `_keepFileContentAlive` property initialized to `false` in constructor
+- **CHANGED:** `finalize(false)` condition: added `&& !this._keepFileContentAlive` guard so file content blocks survive between iterations when rotationCheckpoint is active
+- **Root Cause:** `finalize(false)` at end of iteration killed `_fileContentActive` even when a rotationCheckpoint indicated file was still in progress. Next iteration's tokens went to `llm-token`.
+- **Effect:** File content block stays alive across iteration boundaries when file is incomplete.
+
+### Fix 3: rotationCheckpoint guarded by structural completeness
+- **File:** `pipeline/agenticLoop.js` L2143-2152 — `fileCompletionCheckPending` handler
+- **CHANGED:** Instead of unconditionally nulling `rotationCheckpoint` when model responds with no tool calls, check `_isContentStructurallyComplete()` first. If file is still incomplete, keep checkpoint alive and set `stream._keepFileContentAlive = true`. If complete, null checkpoint and clear flag.
+- **Root Cause:** When model responded to completion check with prose (no tool calls), `rotationCheckpoint` was nulled unconditionally. `_r38FileIncomplete` evaluated to false, causing raw continuation content to route as text instead of file content. This caused repeated file rewrites and naked code.
+- **Effect:** Incomplete files maintain their checkpoint until structurally complete, preventing premature text routing.
+
+### Fix 4: File-operation tools no longer create ToolCallCards
+- **File:** `frontend/src/App.jsx` L75-91 — `tool-executing` and `mcp-tool-results` handlers
+- **ADDED:** `FILE_OPS` set containing `write_file`, `create_file`, `append_to_file`, `edit_file`, `delete_file`, `read_file`
+- **CHANGED:** Both `tool-executing` and `mcp-tool-results` handlers now skip `addStreamingToolCall()` / `updateStreamingToolCall()` for tools in the FILE_OPS set
+- **Root Cause:** All tools including file operations were creating ToolCallCard segments in the chat. File operations should display ONLY via FileContentBlock — the ToolCallCard with full JSON params was redundant and confusing.
+- **Effect:** File-op tools no longer appear as expandable ToolCallCards. Non-file tools (web_search, etc.) still render as ToolCallCards.
+
+---
+
+## 2026-03-31 — R41: Pipeline Bug Fixes D1-D9 (3 files)
+
+### Fix 1: Stop forcing continuation on completed files (D1/D3 — Emoji/Word Spam)
+- **File:** `pipeline/agenticLoop.js` L67-79 — `_isContentStructurallyComplete()`
+- **Root Cause:** For non-HTML/JSON/SVG/XML files, function had a `lineCount >= 50` gate — any file under 50 lines ALWAYS returned `false`. R38-Fix-C then forced up to 5 continuation retries on already-completed files. Model had nothing to say → degenerate sampling → emoji/word spam.
+- **REMOVED:** `if (lineCount >= 50)` gate that required 50+ lines for general files
+- **ADDED:** `if (lineCount < 3) return false` — only reject trivially short content (likely truncated). Anything 3+ lines trusts the model's eogToken as the completion signal, with structural closers (`}`, `)`, `;`) as additional confidence.
+- **Effect:** R38-Fix-C no longer fires on completed short files. HTML/JSON structural checks unchanged.
+
+### Fix 2: Enrich context shift summaries (D2/D4 — Memory Loss)
+- **File:** `pipeline/nativeContextStrategy.js` L271-326 — `summarizeDroppedItems()`
+- **Root Cause:** Dropped model items were summarized as action-only bullets ("Wrote task_manager.py (224 lines)") — file content structure was completely lost. After context shift, model couldn't recall what was IN the file.
+- **ADDED:** 5-line content excerpt after write_file summaries: `Wrote task_manager.py (224 lines) | starts: import datetime class TaskManager...`
+- **ADDED:** Brief model text summaries for non-tool-call responses (first 150 chars) — preserves conversational context that was silently dropped
+- **CHANGED:** Max summary entries 12 → 15 to accommodate richer summaries
+- **Effect:** Model retains structural context about files it wrote and conversational details after context shift.
+
+### Fix 3: filePath validation before tool execution (D7 — Empty filePath EISDIR)
+- **File:** `pipeline/agenticLoop.js` — before `mcpToolServer.executeTool()` call
+- **Root Cause:** Model emitted write_file with empty `filePath` string. Pipeline passed it to MCP which tried to write to a directory path → EISDIR error.
+- **ADDED:** Validation block: for file-operation tools (write_file, create_file, append_to_file, edit_file, read_file, delete_file), checks `effectiveArgs.filePath` is non-empty. If empty, returns error result to model with message "filePath is empty or missing" and skips execution.
+- **Effect:** Empty filePath caught before hitting filesystem. Model gets actionable error message.
+
+### Fix 4: System prompt refinement (D8/D9 — Fabricated Success, Wrong Tool)
+- **File:** `constants.js` L18-79 — both `DEFAULT_SYSTEM_PREAMBLE` and `DEFAULT_COMPACT_PREAMBLE`
+- **D8 Root Cause:** Model claimed "file successfully written" after tool returned an error. Prompt had no instruction to verify tool results.
+- **D9 Root Cause:** Compact preamble said "Chat code blocks are ONLY for short explanations (under 30 lines). Anything longer MUST use write_file." This pushed model to use write_file for inline code discussion (e.g., explaining a bug fix).
+- **ADDED (both preambles):** "After calling a tool, check the result — if the tool returned an error or failed, acknowledge the failure honestly. Do NOT claim success when the tool failed"
+- **CHANGED (full preamble):** "NEVER output file content as inline code blocks" → "NEVER output entire files as inline code blocks. Short code snippets in chat for explanation are fine"
+- **CHANGED (compact preamble):** Removed "Chat code blocks are ONLY for short explanations (under 30 lines). Anything longer MUST use write_file." → "When discussing, explaining, or fixing code: code blocks in chat are fine at any length. Only use write_file when the user asks you to CREATE or MODIFY a file on disk."
+- **Effect:** Model can use code blocks for explanations without being pushed toward write_file. Model should verify tool results before claiming success.
+
+---
+
+## 2026-03-31 — R40: Tool Call Display Overhaul (4 files)
+
+### Root Cause
+Backend `streamHandler.toolExecuting(tools)` sends `[{tool, params}, ...]` as a flat array over websocket.
+Frontend `App.jsx` treated `data` as a single object and read `data.functionName || data.name` — but `data` is an array and elements use `.tool` not `.functionName`. Triple mismatch = every field is `undefined` = blank tool cards.
+
+Additionally, tool calls rendered in a standalone block above all segment content (not inline/chronological), and the card design was too thick/heavy.
+
+### Changes
+
+#### 1. App.jsx L73-91 — Fix array iteration + property mapping
+- **REMOVED:** Single-object reads: `data.functionName || data.name`, `data.params || data.arguments`
+- **ADDED:** `Array.isArray(data)` check, iterates each item, maps `.tool` -> `functionName`
+- **Applies to:** `tool-executing`, `mcp-tool-results`, `tool-checkpoint` — all 3 handlers
+- **Effect:** Tool cards now receive actual data (functionName, params, status, result, duration)
+
+#### 2. appStore.js ~L193 — Tool segments + text buffer flushing
+- **REMOVED:** Simple `push` in `addStreamingToolCall`
+- **ADDED:** Text buffer flush before inserting tool (same pattern as `startFileContentBlock`), then `{type:'tool', toolIndex}` segment added to `streamingSegments`
+- **CHANGED:** `updateStreamingToolCall` now prefers matching pending calls first (handles duplicate tool names)
+- **Effect:** Tool calls appear inline chronologically with text and file blocks
+
+#### 3. ChatPanel.jsx — Inline rendering via segments + duplicate collapse
+- **REMOVED:** Standalone `streamingToolCalls.map()` block in Footer (rendered all tools above content)
+- **REMOVED:** Standalone `msg.toolCalls?.map()` block in finalized messages (same issue)
+- **ADDED:** `seg.type === 'tool'` handling in both streaming and finalized segment loops
+- **ADDED:** Duplicate collapse logic: consecutive tool segments with same functionName render as one ToolCallCard with `count` prop (e.g., "read_file x3")
+- **ADDED:** `seg.type === 'tool'` handling in finalization loop (preserves tool segments in finalized messages)
+- **CHANGED:** Message creation condition: now creates message if there's text content OR tool calls (was text-only)
+- **Effect:** Tools appear inline where they occurred in the conversation, not as a separate block
+
+#### 4. ToolCallCard.jsx — Compact VS Code-style redesign
+- **REMOVED:** Heavy card with shadow, rounded-lg border, separate params/result toggle buttons (~50px tall)
+- **ADDED:** Single-line compact design (~28px): `[chevron] [wrench] functionName [xN count] [duration] [status]`
+- **ADDED:** `border-l-2 border-vsc-accent/40` left accent bar (VS Code style)
+- **ADDED:** Click anywhere on row to expand/collapse (single toggle, not separate)
+- **ADDED:** `count` prop — shows `x3` badge when duplicate tool calls are collapsed
+- **ADDED:** Smart duration display: `<1000ms` shows ms, `>=1000ms` shows seconds with 1 decimal
+- **ADDED:** Success status shows only checkmark icon (no "Done" label) for compactness
+- **Effect:** Tool cards are thin, clean, collapsible, and match VS Code's tool call pattern
+
+---
+
 ## 2026-03-31 — R39: All 9 Defect Fixes + Visual Polish (10 files)
 
 ### Phase A: Frontend UI Fixes
@@ -54,6 +299,100 @@
 - **index.css:** Glass card: enhanced blur (12→16px), saturate (130→140%), added box-shadow depth. Chat messages: subtle border-bottom separators. Chat code blocks: rounded-lg, inset shadow, border. Editor tabs: inset shadow on active. File tree items: border-radius 3px, margins, active inset shadow. Command palette: rounded-xl, enhanced shadow. Notification toast: rounded-xl, blur (16→20px), enhanced shadow.
 - **ToolCallCard.jsx:** Added subtle box-shadow to card container.
 - **Why:** User requested VS Code-level polish — depth, shadows, glassy elements, rounded edges.
+
+---
+
+## 2026-03-30 — R39 STRESS TEST SESSION (10 tests, no code changes)
+
+### Test Environment
+- Model: Qwen3.5-2B-Q8_0.gguf, ctx=8192, TEST_MAX_CONTEXT=8000
+- GPU: RTX 3050 Ti Laptop (4096MB), ~3020MB GPU used
+- Project: r39-test-01, 12 requests, 195,426 total session tokens
+- Server: node server/main.js, port 3000
+
+### Tests Ran (Tests 1-4: prior session; Tests 5-10: this session)
+
+#### Test 5 — Python Code Generation
+- Prompt: Write a Python TaskManager class with CRUD, type hints, docstrings, validation, unit tests
+- Result: **PASS** — Two files generated (task_manager.py: 224 lines, test_task_manager.py: 203 lines)
+- Context went 71% → context shift → 56% — monotonic file growth maintained
+- No emoji spam, generation completed cleanly
+
+#### Test 6 — Architecture Recall (Context Shift Recall)
+- Prompt: Explain the architecture of the TaskManager class you just wrote
+- Result: **FAIL** — D4: model said "I cannot answer this question directly because I don't have a live view of the codebase"
+- Claimed task_manager.py "does not exist" — hallucinated that it previously wrote a JavaScript class
+- Root: Context shift after Test 5 dropped all tool results + generated code from active context
+- Model should have used read_file but instead fabricated a JavaScript backstory and asked user to run commands
+
+#### Test 7 — Multi-Tool Chain (web_search + write_file + list_files)
+- Prompt: Search for current Python version, create python-version.txt, list src folder
+- Result: **PARTIAL PASS** — all 3 tools used correctly in sequence
+- D5: python-version.txt contained the model's entire chat response appended to file content (conversational text leaked into file body). Written 3× (duplicate summaries in file)
+- D6: Python version reported as 3.10.4 (incorrect; 3.13.x is current stable) — web search returned stale source
+- Tool chain mechanics: PASS; output quality: FAIL
+
+#### Test 8 — Bug Fix Task
+- Prompt: Fix ZeroDivisionError in calculate_average() when list is empty
+- Result: **PASS (reasoning) / FAIL (execution)** — model identified correct fix (`if not numbers: return 0`)
+- D7: Model attempted write_file/edit_file with empty filePath → EISDIR error → duplicate call → stuck detector
+- D8: After stuck+blocked, model said "The file has been successfully written" — fabricated success after failure
+- D9: Model tried to write_file for inline code in chat — should have just replied in chat text
+
+#### Test 9 — Rapid-Fire Short Questions
+- Q1: "What is 15 times 15?" → **225** — CORRECT
+- Q2: "What programming language is React written in?" → **JavaScript** — CORRECT
+- Q3: "Name the three laws of robotics by Isaac Asimov" → First two laws correct. Third law truncated ("A robot must self-preserve" instead of "...as long as...First or Second Law"). Hallucinated note added to First Law.
+- Overall: PASS with minor quality issue
+
+#### Test 10 — Final Context Recall (B4/Long-History Test)
+- Prompt: "Do you remember the e-commerce project from the beginning of our conversation? What was Phase 1 and what database did you recommend?"
+- Result: **PARTIAL PASS** — model responded "Yes, I remember our e-commerce project! Phase 1 was basic structure + in-memory products/orders schema, moving toward PostgreSQL or MySQL"
+- Context at this point: entries=2 (system prompt + user message only) — history completely compressed
+- Model answered correctly but from rolling summary, not raw history
+- Context shift did preserve the key project details
+
+### Defects Found This Session
+
+#### D4 — Context Shift Drops Tool Results + Generated Code
+- After Tests 5→6: model lost all tool results from the prior iteration, including the write_file confirmation and the code it generated
+- Instead of using read_file to look up what it wrote, it fabricated a JavaScript story and asked user to run commands
+- Root: Rolling context summary does not preserve tool call results; it only summarizes conversation text
+
+#### D5 — Chat Response Text Leaked into File Body
+- Test 7: python-version.txt contained model's chat response text appended to the file ("Now let me list all the files", "I've completed all three tasks", etc.)
+- File written 3× with duplicate summary paragraphs
+- Root: Model treated file content and chat response as one stream, did not distinguish them
+
+#### D6 — Stale Web Search Result
+- Python version reported as 3.10.4 (not 3.13.x current stable). Source: bairesdev.com blog
+- Minor note: web_search tool may not be prioritizing authoritative sources (python.org)
+
+#### D7 — write_file/edit_file Called with Empty filePath
+- Test 8: Model called edit_file({"filePath":"","oldText":""}) and write_file({"filePath":""}) — empty path
+- EISDIR error, then R32-Fix Phase B blocked duplicate, then stuck detector fired
+- Root: User gave inline code in chat (not referencing a file). Model should not attempt file operations; should explain fix in chat.
+
+#### D8 — Fabricated Success After Tool Failure
+- After write_file failed (empty filePath, EISDIR, blocked duplicate), model said "The file has been successfully written."
+- This is a lie. The model fabricated task completion for an operation that failed 3 times.
+- Root: Final iteration generated text saying success without verifying actual tool results
+
+#### D9 — Inappropriate Tool Use for Inline Code
+- Test 8: User provided code snippet inline in chat. Model attempted file operations instead of inline explanation.
+- Correct behavior: reply in chat text with the fix, no file needed
+
+### Confirmed From Prior Session (D1-D3)
+- D1: R38-Fix-C false positive on completed files → emoji spam loop (5 retries, NativeCtxShift failure at 92%)
+- D2: Context shift drops user introduction — "Marcus" was lost, model fabricated "sessions are isolated" excuse
+- D3: Response degeneration — application table list continues into PostgreSQL system catalog spam
+
+### What Worked Well
+- Basic arithmetic: 7×83, 15×15 — all correct
+- Short factual questions (React language, Asimov laws): mostly correct
+- Multi-file code generation (Test 5): clean, monotonic growth, no spam
+- Multi-tool chain mechanics (Test 7): all 3 tools called in correct sequence
+- Context at 195K tokens, 12 requests — server stable, no crashes
 
 ---
 

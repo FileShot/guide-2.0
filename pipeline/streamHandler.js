@@ -32,6 +32,7 @@ class StreamHandler {
     this._fileContentFilePath = null;    // R19: filePath of the currently active file content block
     this._suspenseBuffer = '';           // R35-L2: tokens buffered when _fileContentActive but no tool hold
     this._suspenseMode = false;          // R35-L2: true when suspense buffering is active
+    this._keepFileContentAlive = false;  // R42-Fix-2: when true, finalize(false) won't kill _fileContentActive
   }
 
   /* ── Core send (safe against destroyed windows) ─────────── */
@@ -422,7 +423,7 @@ class StreamHandler {
     // R37-Fix: Also guard on _suspenseMode — when suspense is active, there's pending content
     // that hasn't been resolved yet. finalize() must NOT kill _fileContentActive before
     // resolveSuspense() runs, or the suspended content routes as llm-token (naked text leak).
-    if (!isToolCall && this._fileContentActive && !this._contentResuming && !this._suspenseMode) {
+    if (!isToolCall && this._fileContentActive && !this._contentResuming && !this._suspenseMode && !this._keepFileContentAlive) {
       this._send('file-content-end', { filePath: this._fileContentFilePath });
       this._fileContentActive = false;
       this._fileContentFilePath = null;
@@ -638,13 +639,10 @@ class StreamHandler {
     } else {
       console.log(`[StreamHandler] R35-L2: Suspense resolved as TEXT (${this._suspenseBuffer.length} chars)`);
       this._send('llm-token', this._suspenseBuffer);
-      // R37-Fix: If file content was active but suspended content was prose,
-      // the model switched away from file content. End the block now.
-      if (this._fileContentActive) {
-        this._send('file-content-end', { filePath: this._fileContentFilePath });
-        this._fileContentActive = false;
-        this._fileContentFilePath = null;
-      }
+      // R42-Fix-1: Do NOT kill _fileContentActive here. The agenticLoop decides
+      // whether the file is structurally complete. Killing it prematurely causes
+      // subsequent tokens to flush as llm-token (naked code in chat).
+      // The agenticLoop calls endFileContent() when the file is truly done.
     }
     this._suspenseBuffer = '';
     this._suspenseMode = false;

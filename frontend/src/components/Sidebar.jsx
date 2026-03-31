@@ -333,19 +333,24 @@ function FileTreeItem({ item, depth }) {
             className="ml-auto p-0.5 hover:bg-vsc-list-hover rounded text-vsc-success opacity-0 group-hover:opacity-60 hover:opacity-100 transition-opacity"
             onClick={(e) => {
               e.stopPropagation();
-              // Fetch and open in browser
+              // R46-B: Open file as tab, then signal EditorArea to show preview
               fetch(`/api/files/read?path=${encodeURIComponent(item.path)}`)
                 .then(r => r.json())
                 .then(f => {
                   if (f.content !== undefined) {
-                    const blob = new Blob([f.content], { type: 'text/html' });
-                    const url = URL.createObjectURL(blob);
-                    window.open(url, '_blank');
+                    useAppStore.getState().openFile({
+                      path: item.path,
+                      name: item.name,
+                      extension: item.extension,
+                      content: f.content,
+                    });
+                    // Set preview request flag — EditorArea will pick this up
+                    useAppStore.getState().setPreviewRequested(true);
                   }
                 })
                 .catch(() => {});
             }}
-            title="Run in browser"
+            title="Preview in viewport"
           >
             <Play size={12} />
           </button>

@@ -7,6 +7,7 @@ import Editor from '@monaco-editor/react';
 import useAppStore from '../stores/appStore';
 import DiffViewer from './DiffViewer';
 import InlineChat from './InlineChat';
+import BrowserPanel from './BrowserPanel';
 import {
   isPreviewable, getPreviewType,
   HtmlPreview, MarkdownPreview, JsonPreview, CsvPreview, SvgPreview, ImagePreview
@@ -15,7 +16,7 @@ import FileIcon from './FileIcon';
 import {
   X, Circle, FolderOpen, MessageSquare, Settings,
   FileText, Copy,
-  Eye, Code2, Play, ExternalLink
+  Eye, Code2, Play, ExternalLink, Globe
 } from 'lucide-react';
 
 export default function EditorArea() {
@@ -36,6 +37,16 @@ export default function EditorArea() {
   const [inlineChat, setInlineChat] = useState(null);
   const [previewMode, setPreviewMode] = useState({}); // { [tabId]: boolean }
   const editorRef = useRef(null);
+  const previewRequested = useAppStore(s => s.previewRequested);
+
+  // R46-B: When Sidebar play button opens a file and sets previewRequested,
+  // activate preview mode on the active tab
+  useEffect(() => {
+    if (previewRequested && activeTabId) {
+      setPreviewMode(p => ({ ...p, [activeTabId]: true }));
+      useAppStore.getState().setPreviewRequested(false);
+    }
+  }, [previewRequested, activeTabId]);
 
   const activeTab = openTabs.find(t => t.id === activeTabId);
   const addChatMessage = useAppStore(s => s.addChatMessage);
@@ -119,6 +130,7 @@ export default function EditorArea() {
       <div className="flex h-tabbar bg-vsc-tab-border overflow-x-auto scrollbar-none no-select">
         {openTabs.map(tab => {
           const isHtml = tab.extension === 'html' || tab.extension === 'htm';
+          const isBrowserTab = tab.type === 'browser';
           return (
             <div
               key={tab.id}
@@ -126,7 +138,7 @@ export default function EditorArea() {
               onClick={() => setActiveTab(tab.id)}
               onContextMenu={(e) => handleTabContextMenu(e, tab.id)}
             >
-              <FileIcon extension={tab.extension} size={14} />
+              {isBrowserTab ? <Globe size={14} className="text-vsc-accent flex-shrink-0" /> : <FileIcon extension={tab.extension} size={14} />}
               <span className="truncate text-vsc-sm">{tab.name}</span>
               {tab.modified && <Circle size={8} className="text-vsc-text-bright fill-current flex-shrink-0" />}
               {/* Play button for HTML files */}
@@ -135,13 +147,10 @@ export default function EditorArea() {
                   className="p-0.5 hover:bg-vsc-list-hover rounded text-vsc-success opacity-60 hover:opacity-100"
                   onClick={(e) => { 
                     e.stopPropagation(); 
-                    // Open in external browser
-                    const content = tab.content || '';
-                    const blob = new Blob([content], { type: 'text/html' });
-                    const url = URL.createObjectURL(blob);
-                    window.open(url, '_blank');
+                    // R46-B: Open preview in viewport instead of external browser
+                    setPreviewMode(p => ({ ...p, [tab.id]: true }));
                   }}
-                  title="Run in browser"
+                  title="Preview in viewport"
                 >
                   <Play size={12} />
                 </button>
@@ -202,10 +211,12 @@ export default function EditorArea() {
         </div>
       )}
 
-      {/* Monaco Editor, Diff Viewer, or Preview */}
+      {/* Monaco Editor, Diff Viewer, Preview, or Browser */}
       <div className="flex-1 min-h-0">
         {diffState ? (
           <DiffViewer />
+        ) : activeTab && activeTab.type === 'browser' ? (
+          <BrowserPanel />
         ) : activeTab && previewMode[activeTab.id] && getPreviewType(activeTab.path) ? (
           (() => {
             const type = getPreviewType(activeTab.path);

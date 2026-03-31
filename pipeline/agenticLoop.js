@@ -64,15 +64,16 @@ function _isContentStructurallyComplete(content, filePath) {
   } else if (['json'].includes(ext)) {
     return /[}\]]\s*$/.test(trimmed);
   } else {
-    // General heuristic: if content is substantial AND ends with a
-    // recognized structural closer, treat as likely complete
+    // For non-markup/non-JSON files, we have no reliable structural markers.
+    // The model's eogToken (natural stop) IS the completion signal.
+    // Only return false if the content is clearly mid-statement or trivially short.
     const lineCount = (trimmed.match(/\n/g) || []).length + 1;
-    if (lineCount >= 50) {
-      return /[}\]);]\s*$/.test(trimmed) ||
-        /<\/[a-zA-Z][a-zA-Z0-9]*>\s*$/.test(trimmed) ||
-        /\/\/\s*(?:end|eof|done)/i.test(trimmed.slice(-50));
-    }
-    return false;
+    if (lineCount < 3) return false; // Trivially short — likely truncated
+    // Check for common structural closers as additional confidence
+    return /[}\]);]\s*$/.test(trimmed) ||
+      /<\/[a-zA-Z][a-zA-Z0-9]*>\s*$/.test(trimmed) ||
+      /\/\/\s*(?:end|eof|done)/i.test(trimmed.slice(-50)) ||
+      /\S/.test(trimmed.slice(-1)); // Ends with non-whitespace = not mid-truncation
   }
 }
 
@@ -124,7 +125,9 @@ async function handleLocalChat(ctx, message, context, helpers) {
   mcpToolServer.onTodoUpdate = (todos) => stream.todoUpdate(todos);
 
   // Apply frontend settings to engine
-  if (context?.params?.thinkingBudget !== undefined) {
+  // R43-Fix-D: Only override if thinkingBudget is non-zero. 0 means "auto" (use profile default).
+  // Previously, 0 was passed through and set budgets.thoughtTokens=0 in llmEngine, disabling thinking entirely.
+  if (context?.params?.thinkingBudget) {
     llmEngine.thoughtTokenBudget = context.params.thinkingBudget;
   }
   if (context?.params?.generationTimeoutSec > 0) {
@@ -1615,6 +1618,21 @@ async function handleLocalChat(ctx, message, context, helpers) {
           }
         }
 
+        // Fix 3 (D7): Validate filePath for file-operation tools before execution.
+        // Empty/whitespace filePath causes EISDIR errors. Reject early and tell the model.
+        const FILE_TOOLS = new Set(['write_file', 'create_file', 'append_to_file', 'edit_file', 'read_file', 'delete_file']);
+        if (FILE_TOOLS.has(effectiveName) && (!effectiveArgs?.filePath || !effectiveArgs.filePath.trim())) {
+          console.log(`[AgenticLoop] Fix-3: Blocked ${effectiveName} — empty filePath`);
+          const entry = {
+            tool: toolCall.name,
+            params: toolCall.arguments,
+            result: { success: false, content: `Error: filePath is empty or missing. You must provide a valid file path (e.g., "src/index.html").` },
+          };
+          toolResultEntries.push(entry);
+          rollingSummary.recordToolCall(toolCall.name, toolCall.arguments, iteration);
+          continue;
+        }
+
         try {
           const toolResult = await mcpToolServer.executeTool(effectiveName, effectiveArgs);
           const entry = {
@@ -1848,7 +1866,9 @@ async function handleLocalChat(ctx, message, context, helpers) {
             const lineCount = (fullContent.match(/\n/g) || []).length + 1;
             nextUserMessage = `File(s) written: "${lastFileWrite.params.filePath}" (${lineCount} lines). The file has been saved to disk. If the task is complete, provide a brief summary of what was created. Do NOT rewrite the file. Do NOT use write_file again. If there are additional files to create for the task, create them now.`;
             console.log(`[AgenticLoop] T58-Fix-A: salvage + natural stop + content COMPLETE — using completion path for "${lastFileWrite.params.filePath}" (${lineCount} lines, ${fullContent.length} chars)`);
-            stream.endFileContent();
+            // R44: Do NOT call stream.endFileContent() here — mid-loop endFileContent kills
+            // _fileContentActive, causing next iteration to create a NEW FileContentBlock.
+            // The loop-exit endFileContent() calls handle cleanup.
             rotationCheckpoint = null; // R31-Fix: file confirmed complete — prevent Fix-M from injecting summary prose in next iteration
             fileCompletionCheckPending = true; // R31-Fix Phase 1: signal to skip Fix-M on model's summary response
           }
@@ -1971,7 +1991,9 @@ async function handleLocalChat(ctx, message, context, helpers) {
             const fullLineCount = (fullContent.match(/\n/g) || []).length + 1;
             nextUserMessage = `File(s) written: "${lastFileWrite.params.filePath}" (${fullLineCount} lines). The file has been saved to disk. If the task is complete, provide a brief summary of what was created. Do NOT rewrite the file. Do NOT use write_file again. If there are additional files to create for the task, create them now.`;
             console.log(`[AgenticLoop] R35-L1b: Post-context-shift content COMPLETE — using completion path for "${lastFileWrite.params.filePath}" (${fullLineCount} lines, ${fullContent.length} chars)`);
-            stream.endFileContent();
+            // R44: Do NOT call stream.endFileContent() here — mid-loop endFileContent kills
+            // _fileContentActive, causing next iteration to create a NEW FileContentBlock.
+            // The loop-exit endFileContent() calls handle cleanup.
             rotationCheckpoint = null;
             fileCompletionCheckPending = true;
           } else {
@@ -2124,8 +2146,16 @@ async function handleLocalChat(ctx, message, context, helpers) {
       // with no tool calls (= summary prose), null the checkpoint so Fix-M can't fire.
       // If model DID produce tool calls, it's continuing — clear flag and proceed normally.
       if (fileCompletionCheckPending && toolCalls.length === 0) {
-        console.log('[AgenticLoop] R31-Fix: Completion check response has no tool calls — nulling rotationCheckpoint to prevent Fix-M prose injection');
-        rotationCheckpoint = null;
+        // R42-Fix-3: Only null rotationCheckpoint if file is structurally complete.
+        // If file is still incomplete, keep the checkpoint alive so continuation can resume.
+        if (rotationCheckpoint && _isContentStructurallyComplete(rotationCheckpoint.content, rotationCheckpoint.filePath)) {
+          console.log('[AgenticLoop] R42-Fix-3: File structurally complete — nulling rotationCheckpoint');
+          rotationCheckpoint = null;
+          stream._keepFileContentAlive = false;
+        } else {
+          console.log('[AgenticLoop] R42-Fix-3: File still incomplete — keeping rotationCheckpoint alive');
+          stream._keepFileContentAlive = true;
+        }
         fileCompletionCheckPending = false;
       } else if (fileCompletionCheckPending) {
         console.log('[AgenticLoop] R31-Fix: Completion check response has tool calls — model is continuing, proceeding normally');

@@ -295,8 +295,12 @@ function summarizeDroppedItems(items) {
       const toolCalls = item.response.filter(r => r && r.type === 'functionCall');
       for (const call of toolCalls) {
         if (call.name === 'write_file' && call.params?.filePath) {
-          const lines = call.params.content ? (call.params.content.match(/\n/g) || []).length + 1 : '?';
-          parts.push(`Wrote ${call.params.filePath} (${lines} lines)`);
+          const content = call.params.content || '';
+          const lines = content ? (content.match(/\n/g) || []).length + 1 : '?';
+          // Include a brief content excerpt so the model retains structural context
+          const excerpt = content.split('\n').slice(0, 5).join(' ').trim().slice(0, 120);
+          const excerptSuffix = excerpt ? ` | starts: ${excerpt}` : '';
+          parts.push(`Wrote ${call.params.filePath} (${lines} lines)${excerptSuffix}`);
         } else if (call.name === 'append_to_file' && call.params?.filePath) {
           parts.push(`Appended to ${call.params.filePath}`);
         } else if (call.name === 'read_file' && call.params?.filePath) {
@@ -305,11 +309,19 @@ function summarizeDroppedItems(items) {
           parts.push(`Tool: ${call.name}`);
         }
       }
+      // Also capture brief text responses (non-tool-call model text)
+      const textParts = item.response.filter(r => typeof r === 'string');
+      if (textParts.length > 0 && toolCalls.length === 0) {
+        const modelText = textParts.join('').trim();
+        if (modelText.length > 20) {
+          parts.push(`Assistant: ${modelText.slice(0, 150)}${modelText.length > 150 ? '...' : ''}`);
+        }
+      }
     }
   }
 
   const unique = [...new Set(parts)];
-  return unique.slice(0, 12).join('\n');
+  return unique.slice(0, 15).join('\n');
 }
 
 /**

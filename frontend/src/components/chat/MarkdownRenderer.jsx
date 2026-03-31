@@ -12,6 +12,32 @@ import CodeBlock from './CodeBlock';
 import MermaidBlock from './MermaidBlock';
 import 'katex/dist/katex.min.css';
 
+// R43-Fix-A: Sanitize children at the HAST→React boundary.
+// rehype-highlight/rehype-katex can occasionally produce HAST nodes that
+// hast-util-to-jsx-runtime fails to convert to valid React elements,
+// especially during rapid streaming updates. These arrive as plain JS objects
+// ({type:'text', value:'...'} or {type:'element', ...}). React 19 throws
+// Error #185 when a plain object is rendered as a child.
+function sanitizeChildren(children) {
+  if (children == null || typeof children === 'string' || typeof children === 'number' || typeof children === 'boolean') {
+    return children;
+  }
+  // Valid React element — has $$typeof
+  if (children != null && typeof children === 'object' && children.$$typeof) {
+    return children;
+  }
+  if (Array.isArray(children)) {
+    return children.map(sanitizeChildren);
+  }
+  // Plain object — likely unconverted HAST node. Extract text value if available.
+  if (typeof children === 'object') {
+    if (children.value != null) return String(children.value);
+    if (children.children) return sanitizeChildren(children.children);
+    return String(children);
+  }
+  return children;
+}
+
 // Custom components for ReactMarkdown
 const markdownComponents = {
   // Code blocks — delegate to CodeBlock for block code, inline stays styled
@@ -25,6 +51,9 @@ const markdownComponents = {
     // rehype-highlight adds className like "language-javascript hljs"
     const hasLanguageClass = /language-/.test(className || '');
 
+    // R43-Fix-A: Sanitize children before passing to React DOM
+    const safeChildren = sanitizeChildren(children);
+
     if (hasLanguageClass || (node?.tagName === 'code' && node?.properties?.className)) {
       // Block code — render in CodeBlock (or MermaidBlock for mermaid)
       // Extract language, filtering out 'hljs' which rehype-highlight adds as a utility class
@@ -32,12 +61,12 @@ const markdownComponents = {
       const langToken = classTokens.find(c => c.startsWith('language-'));
       const lang = langToken ? langToken.replace(/^language-/, '') : (classTokens[0] || '');
       if (lang === 'mermaid') {
-        const text = Array.isArray(children) ? children.join('') : String(children || '');
+        const text = Array.isArray(safeChildren) ? safeChildren.join('') : String(safeChildren || '');
         return <MermaidBlock>{text}</MermaidBlock>;
       }
       return (
         <CodeBlock language={lang} className={className}>
-          {children}
+          {safeChildren}
         </CodeBlock>
       );
     }
@@ -45,7 +74,7 @@ const markdownComponents = {
     // Inline code
     return (
       <code className="bg-vsc-input px-1.5 py-0.5 rounded text-vsc-sm text-vsc-text-bright" {...props}>
-        {children}
+        {safeChildren}
       </code>
     );
   },

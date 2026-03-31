@@ -29,7 +29,14 @@ export default function ActivityBar() {
             key={id}
             className={`activity-bar-icon ${activeActivity === id ? 'active' : ''}`}
             title={label}
-            onClick={() => setActiveActivity(id)}
+            onClick={() => {
+              // R46-C: Browser opens as editor tab, not sidebar panel
+              if (id === 'browser') {
+                useAppStore.getState().openBrowserTab();
+              } else {
+                setActiveActivity(id);
+              }
+            }}
           >
             <Icon size={24} strokeWidth={1.5} />
           </button>

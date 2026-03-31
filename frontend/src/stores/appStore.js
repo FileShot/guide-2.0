@@ -68,6 +68,27 @@ const useAppStore = create((set, get) => ({
     set({ openTabs: [...openTabs, tab], activeTabId: id });
   },
 
+  // R46-C: Open browser panel as an editor tab instead of sidebar
+  openBrowserTab: () => {
+    const { openTabs } = get();
+    const existing = openTabs.find(t => t.type === 'browser');
+    if (existing) {
+      set({ activeTabId: existing.id });
+      return;
+    }
+    const id = `tab-browser-${Date.now()}`;
+    const tab = {
+      id,
+      type: 'browser',
+      path: '__browser__',
+      name: 'Browser',
+      extension: '',
+      content: '',
+      modified: false,
+    };
+    set({ openTabs: [...openTabs, tab], activeTabId: id });
+  },
+
   closeTab: (tabId) => {
     const { openTabs, activeTabId } = get();
     const idx = openTabs.findIndex(t => t.id === tabId);
@@ -108,6 +129,11 @@ const useAppStore = create((set, get) => ({
       ),
     });
   },
+
+  // R46-B: Preview request flag — Sidebar sets this when play button clicked,
+  // EditorArea picks it up to activate preview mode on the newly opened tab
+  previewRequested: false,
+  setPreviewRequested: (val) => set({ previewRequested: val }),
 
   // ─── Chat ──────────────────────────────────────────────
   chatMessages: [],       // [{id, role, content, timestamp, toolCalls?, thinking?}]
@@ -189,14 +215,40 @@ const useAppStore = create((set, get) => ({
   setChatContextUsage: (usage) => set({ chatContextUsage: usage }),
   setChatIteration: (iter) => set({ chatIteration: iter }),
 
-  // R39-A1: Tool call tracking
+  // R39-A1 + R40: Tool call tracking with segment interleaving
   addStreamingToolCall: (tc) => {
-    const { streamingToolCalls } = get();
-    set({ streamingToolCalls: [...streamingToolCalls, tc] });
+    // Flush pending text buffer before inserting tool segment (same pattern as startFileContentBlock)
+    const store = get();
+    if (store._textTokenTimer) clearTimeout(store._textTokenTimer);
+    let currentText = store.chatStreamingText;
+    let currentSegs = store.streamingSegments;
+    if (store._textTokenBuffer) {
+      const buf = store._textTokenBuffer;
+      currentText = currentText + buf;
+      if (currentSegs.length > 0 && currentSegs[currentSegs.length - 1].type === 'text') {
+        currentSegs = [...currentSegs];
+        const lastSeg = currentSegs[currentSegs.length - 1];
+        currentSegs[currentSegs.length - 1] = { ...lastSeg, content: lastSeg.content + buf };
+      } else {
+        currentSegs = [...currentSegs, { type: 'text', content: buf }];
+      }
+    }
+    const newToolCalls = [...store.streamingToolCalls, tc];
+    const toolIndex = newToolCalls.length - 1;
+    const newSegs = [...currentSegs, { type: 'tool', toolIndex }];
+    set({
+      streamingToolCalls: newToolCalls,
+      streamingSegments: newSegs,
+      chatStreamingText: currentText,
+      _textTokenBuffer: null,
+      _textTokenTimer: null,
+    });
   },
   updateStreamingToolCall: (name, updates) => {
     const { streamingToolCalls } = get();
-    const idx = streamingToolCalls.findIndex(tc => tc.functionName === name);
+    // Prefer matching a pending call with this name (handles duplicates)
+    let idx = streamingToolCalls.findIndex(tc => tc.functionName === name && tc.status === 'pending');
+    if (idx === -1) idx = streamingToolCalls.findIndex(tc => tc.functionName === name);
     if (idx === -1) return;
     const updated = [...streamingToolCalls];
     updated[idx] = { ...updated[idx], ...updates };

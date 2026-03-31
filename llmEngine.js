@@ -1013,6 +1013,8 @@ class LLMEngine extends EventEmitter {
     if (thoughtBudget === -1) budgets.thoughtTokens = Infinity;
     else if (thoughtBudget === 0) budgets.thoughtTokens = 0;
     else budgets.thoughtTokens = thoughtBudget;
+    // R46-F: Diagnostic log showing actual thinking budget being sent to node-llama-cpp
+    console.log(`[LLM] Thinking budget: thoughtTokenBudget=${thoughtBudget}, budgets.thoughtTokens=${budgets.thoughtTokens}`);
 
     // Use native context shift strategy with custom compression logic
     // Solution A: Let node-llama-cpp handle WHEN to shift, we define WHAT happens

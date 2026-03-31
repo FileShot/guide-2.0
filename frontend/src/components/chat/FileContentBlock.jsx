@@ -84,8 +84,9 @@ const FileContentBlock = React.memo(function FileContentBlock({ filePath, langua
   }, [content, complete, isCollapsed]);
 
   // Inline styles — bypass Tailwind JIT entirely
+  // R44: Always allow scrolling — 'hidden' on complete blocks prevented Show More / scroll
   const contentStyle = isCollapsed
-    ? { maxHeight: '240px', overflowY: complete ? 'hidden' : 'auto', overflowX: 'auto' }
+    ? { maxHeight: '240px', overflowY: 'auto', overflowX: 'auto' }
     : { maxHeight: '80vh', overflowY: 'auto', overflowX: 'auto' };
 
   // R37-Step9: When streaming+collapsed, pad bottom of content by overlay height (~80px)

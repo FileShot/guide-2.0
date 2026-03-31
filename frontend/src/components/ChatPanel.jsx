@@ -2,7 +2,7 @@
  * ChatPanel — AI chat interface with streaming markdown rendering.
  * Features a cohesive unified input container with toolbar.
  */
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo, Component } from 'react';
 import useAppStore from '../stores/appStore';
 import MarkdownRenderer from './chat/MarkdownRenderer';
 import ToolCallCard from './chat/ToolCallCard';
@@ -12,8 +12,310 @@ import {
   Send, Square, Trash2, Cpu, Loader, ChevronDown, ChevronRight, Brain,
   Paperclip, Mic, Zap, FileCode, ArrowUp, ChevronUp, Plus, Minus,
   Check, Undo2, X, Star, GripVertical, RotateCcw, Clock, Settings,
-  Cloud, Key, FolderPlus, Sparkles, Eye, ImageIcon
+  Cloud, Key, FolderPlus, Sparkles, Eye, ImageIcon,
+  CheckCircle2, Circle, Loader2, ListTodo
 } from 'lucide-react';
+
+// R43-Fix-B: Streaming-scoped error boundary.
+// Catches React render errors in MarkdownRenderer during streaming and shows
+// the raw text as fallback instead of crashing the entire app.
+// Auto-recovers on next content update since props change triggers re-render.
+class StreamingErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  componentDidCatch(error) {
+    console.warn('[StreamingErrorBoundary] MarkdownRenderer error caught:', error.message);
+  }
+  componentDidUpdate(prevProps) {
+    // Auto-recover when content changes — the new content might render fine
+    if (this.state.hasError && prevProps.fallbackContent !== this.props.fallbackContent) {
+      this.setState({ hasError: false });
+    }
+  }
+  render() {
+    if (this.state.hasError) {
+      // Show raw text as fallback
+      return (
+        <pre className="whitespace-pre-wrap text-vsc-sm text-vsc-text p-2">
+          {this.props.fallbackContent || ''}
+        </pre>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+// Finalized thinking block — shown on already-completed assistant messages.
+// Collapsed by default (unlike streaming ThinkingBlock which auto-expands).
+function FinalizedThinkingBlock({ text }) {
+  const [expanded, setExpanded] = useState(false);
+  const lines = text.split('\n').filter(l => l.trim());
+
+  return (
+    <div className="mb-1 overflow-hidden">
+      <button
+        className="w-full flex items-center gap-1 py-0.5 text-[10px] transition-colors leading-tight min-h-0"
+        style={{ color: 'var(--vsc-text-dim, #858585)' }}
+        onClick={() => setExpanded(!expanded)}
+      >
+        <span className={`text-[8px] transition-transform duration-150 flex-shrink-0 ${expanded ? 'rotate-90' : ''}`}>
+          &#9654;
+        </span>
+        <span className="font-medium whitespace-nowrap flex-shrink-0 text-vsc-text">
+          <em>Thought for {lines.length} line{lines.length !== 1 ? 's' : ''}</em>
+        </span>
+        <Check size={9} className="ml-auto flex-shrink-0" style={{ color: '#4ec9b0' }} />
+      </button>
+      {expanded && (
+        <div
+          className="px-2 pb-1.5 text-[10px] whitespace-pre-wrap leading-relaxed max-h-[180px] overflow-y-auto text-vsc-text-dim"
+          style={{ borderTop: '1px solid var(--vsc-panel-border, #2d2d2d)' }}
+        >
+          {text}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// R44-Fix-2: Stable Header component — defined at module level so Virtuoso
+// receives a stable function reference. Reads state from store directly,
+// not from ChatPanel closures. Prevents unmount/remount every 80ms render.
+function StreamingHeader() {
+  const modelLoaded = useAppStore(s => s.modelLoaded);
+  const connected = useAppStore(s => s.connected);
+  const todos = useAppStore(s => s.todos);
+
+  return (
+    <>
+      {!modelLoaded && connected && (
+        <div className="m-3 p-3 bg-vsc-sidebar rounded-lg border border-vsc-warning/20 text-vsc-sm">
+          <div className="text-vsc-warning font-medium mb-1">No model loaded</div>
+          <div className="text-vsc-text-dim text-vsc-xs">
+            Load a GGUF model from the Settings panel to start chatting.
+          </div>
+        </div>
+      )}
+      {!connected && (
+        <div className="m-3 p-3 bg-vsc-sidebar rounded-lg border border-vsc-error/20 text-vsc-sm">
+          <div className="text-vsc-error font-medium mb-1">Not connected</div>
+          <div className="text-vsc-text-dim text-vsc-xs">
+            Waiting for backend server connection...
+          </div>
+        </div>
+      )}
+      {todos.length > 0 && (() => {
+        const done = todos.filter(t => t.status === 'done').length;
+        const total = todos.length;
+        const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+        const allDone = done === total;
+        const inProgress = todos.find(t => t.status === 'in-progress');
+        return (
+          <div className="mx-3 mt-2 p-2 bg-vsc-sidebar rounded-lg border border-vsc-panel-border/50 text-[10px]">
+            <div className="flex items-center gap-1.5 mb-1">
+              <ListTodo size={10} className="flex-shrink-0" style={{ color: allDone ? '#89d185' : 'var(--vsc-accent)' }} />
+              <span className="font-medium" style={{ color: allDone ? '#89d185' : 'var(--vsc-text)' }}>
+                {allDone ? 'Plan complete' : 'Plan'}
+              </span>
+              <span className="text-vsc-text-dim">{done}/{total}</span>
+              <div className="flex-1 h-[3px] rounded-full overflow-hidden ml-1" style={{ backgroundColor: 'var(--vsc-selection, #264f78)' }}>
+                <div
+                  className="h-full rounded-full transition-all duration-500"
+                  style={{ width: `${pct}%`, backgroundColor: allDone ? '#89d185' : 'var(--vsc-accent)' }}
+                />
+              </div>
+            </div>
+            {todos.map(todo => (
+              <div
+                key={todo.id}
+                className="flex items-start gap-1.5 py-[1px] transition-all duration-200"
+                style={{
+                  color: todo.status === 'done' ? 'var(--vsc-text-dim)' : todo.status === 'in-progress' ? '#dcdcaa' : 'var(--vsc-text)',
+                  textDecoration: todo.status === 'done' ? 'line-through' : 'none',
+                  opacity: todo.status === 'done' ? 0.6 : 1,
+                }}
+              >
+                {todo.status === 'done'
+                  ? <CheckCircle2 size={11} className="flex-shrink-0" style={{ color: '#89d185' }} />
+                  : todo.status === 'in-progress'
+                    ? <Loader2 size={11} className="animate-spin flex-shrink-0" style={{ color: 'var(--vsc-accent)' }} />
+                    : <Circle size={11} className="flex-shrink-0 text-vsc-text-dim" />
+                }
+                <span className="leading-snug">{todo.text}</span>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
+    </>
+  );
+}
+
+// R44-Fix-2: Stable Footer component — defined at module level so Virtuoso
+// receives a stable function reference. Reads state from store directly,
+// not from ChatPanel closures. thinkingExpanded state lives here now.
+// Prevents unmount/remount every 80ms which was causing:
+// - code block stuttering (CodeBlock's MutationObserver + setInterval destroyed/recreated)
+// - scroll position resetting to top
+// - "Show More" click handlers lost
+function StreamingFooter() {
+  const chatStreaming = useAppStore(s => s.chatStreaming);
+  const chatStreamingText = useAppStore(s => s.chatStreamingText);
+  const chatThinkingText = useAppStore(s => s.chatThinkingText);
+  const chatGeneratingTool = useAppStore(s => s.chatGeneratingTool);
+  const chatIteration = useAppStore(s => s.chatIteration);
+  const streamingSegments = useAppStore(s => s.streamingSegments);
+  const streamingFileBlocks = useAppStore(s => s.streamingFileBlocks);
+  const streamingToolCalls = useAppStore(s => s.streamingToolCalls);
+  const modelInfo = useAppStore(s => s.modelInfo);
+
+  // Thinking block state — VS Code style with elapsed time tracking
+  const [thinkingExpanded, setThinkingExpanded] = useState(true);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const thinkStartRef = useRef(null);
+  const wasThinkingRef = useRef(false);
+  const thinkContentRef = useRef(null);
+
+  // Track thinking start/end and elapsed time
+  const isThinking = !!chatThinkingText && chatStreaming;
+  useEffect(() => {
+    if (isThinking && !wasThinkingRef.current) {
+      // Thinking just started
+      thinkStartRef.current = Date.now();
+      setThinkingExpanded(true);
+      wasThinkingRef.current = true;
+    }
+    if (!isThinking && wasThinkingRef.current) {
+      // Thinking just ended
+      if (thinkStartRef.current) {
+        setElapsedSeconds(Math.round((Date.now() - thinkStartRef.current) / 1000));
+      }
+      wasThinkingRef.current = false;
+    }
+  }, [isThinking]);
+
+  // Auto-scroll thinking content during streaming
+  useEffect(() => {
+    if (isThinking && thinkingExpanded && thinkContentRef.current) {
+      thinkContentRef.current.scrollTop = thinkContentRef.current.scrollHeight;
+    }
+  }, [chatThinkingText, isThinking, thinkingExpanded]);
+
+  if (!chatStreaming) return null;
+
+  // Thinking label: "Reasoning..." while live, "Thought for Xs" after
+  const thinkLabel = isThinking
+    ? 'Reasoning...'
+    : chatThinkingText
+      ? `Thought for ${elapsedSeconds < 1 ? '<1' : elapsedSeconds}s`
+      : null;
+
+  return (
+    <div className="chat-message assistant">
+      <div className="text-vsc-xs text-vsc-text-dim mb-1 font-medium uppercase tracking-wider flex items-center gap-2">
+        {(modelInfo?.name || 'guIDE').split('/').pop().split('-Q')[0]}
+        {chatIteration && chatIteration.iteration > 1 && (
+          <span className="text-vsc-accent">Step {chatIteration.iteration}/{chatIteration.maxIterations}</span>
+        )}
+      </div>
+      {chatThinkingText && (
+        <div className="mb-2 overflow-hidden">
+          <button
+            className="w-full flex items-center gap-1 py-0.5 text-[10px] transition-colors leading-tight min-h-0"
+            style={{ color: 'var(--vsc-text-dim, #858585)' }}
+            onClick={() => setThinkingExpanded(!thinkingExpanded)}
+          >
+            <span className={`text-[8px] transition-transform duration-150 flex-shrink-0 ${thinkingExpanded ? 'rotate-90' : ''}`}>
+              &#9654;
+            </span>
+            <span className="font-medium whitespace-nowrap flex-shrink-0 text-vsc-text">
+              <em>{thinkLabel}</em>
+            </span>
+            {isThinking
+              ? <Loader2 size={8} className="animate-spin ml-auto flex-shrink-0 text-vsc-text" />
+              : <Check size={9} className="ml-auto flex-shrink-0" style={{ color: '#4ec9b0' }} />
+            }
+          </button>
+          {thinkingExpanded && (
+            <div
+              ref={thinkContentRef}
+              className="px-2 pb-1.5 text-[10px] whitespace-pre-wrap leading-relaxed max-h-[180px] overflow-y-auto text-vsc-text-dim"
+              style={{ borderTop: '1px solid var(--vsc-panel-border, #2d2d2d)' }}
+            >
+              {chatThinkingText}
+            </div>
+          )}
+        </div>
+      )}
+      {chatGeneratingTool && !chatGeneratingTool.done && (
+        <div className="flex items-center gap-2 mb-2 text-vsc-xs text-vsc-accent">
+          <Loader size={12} className="animate-spin" />
+          <span>Generating: {chatGeneratingTool.functionName}</span>
+        </div>
+      )}
+      {streamingSegments.map((seg, i) => {
+        if (seg.type === 'text' && seg.content && seg.content.trim()) {
+          const isLastSeg = i === streamingSegments.length - 1;
+          return (
+            <div key={`seg-text-${i}`}>
+              <StreamingErrorBoundary fallbackContent={seg.content}>
+                <MarkdownRenderer content={seg.content} streaming />
+              </StreamingErrorBoundary>
+              {isLastSeg && <span className="streaming-cursor" />}
+            </div>
+          );
+        }
+        if (seg.type === 'file') {
+          const block = streamingFileBlocks[seg.index];
+          if (!block) return null;
+          return (
+            <FileContentBlock
+              key={`seg-file-${seg.index}`}
+              filePath={block.filePath}
+              language={block.language}
+              fileName={block.fileName}
+              content={block.content}
+              complete={block.complete}
+            />
+          );
+        }
+        if (seg.type === 'tool') {
+          const tc = streamingToolCalls[seg.toolIndex];
+          if (!tc) return null;
+          if (i > 0) {
+            const prev = streamingSegments[i - 1];
+            if (prev.type === 'tool') {
+              const prevTc = streamingToolCalls[prev.toolIndex];
+              if (prevTc && prevTc.functionName === tc.functionName) return null;
+            }
+          }
+          let count = 1;
+          for (let j = i + 1; j < streamingSegments.length; j++) {
+            const next = streamingSegments[j];
+            if (next.type !== 'tool') break;
+            const nextTc = streamingToolCalls[next.toolIndex];
+            if (!nextTc || nextTc.functionName !== tc.functionName) break;
+            count++;
+          }
+          return <ToolCallCard key={`seg-tool-${seg.toolIndex}`} toolCall={tc} count={count} />;
+        }
+        return null;
+      })}
+      {!chatStreamingText && !chatThinkingText && streamingSegments.length === 0 && (
+        <div className="flex items-center gap-1 py-2">
+          <div className="w-1.5 h-1.5 bg-vsc-text-dim rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+          <div className="w-1.5 h-1.5 bg-vsc-text-dim rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+          <div className="w-1.5 h-1.5 bg-vsc-text-dim rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function ChatPanel() {
   const chatMessages = useAppStore(s => s.chatMessages);
@@ -56,7 +358,6 @@ export default function ChatPanel() {
   const [autoMode, setAutoMode] = useState(false);
   const [planMode, setPlanMode] = useState(false);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
-  const [thinkingExpanded, setThinkingExpanded] = useState(false);
   const inputRef = useRef(null);
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -204,9 +505,30 @@ export default function ChatPanel() {
       // R33-Phase4: Use streamingSegments for correct ordering
       // R27-B: Use fresh getState() — store snapshot from L125 is stale after long await
       // R35-L4: Store segment structure on message for rendering with FileContentBlock
+      // R46-G: Flush any pending text token buffer BEFORE reading segments.
+      // Without this, last tokens stuck in the 80ms buffer get dropped from the finalized message.
+      {
+        const preFlush = useAppStore.getState();
+        if (preFlush._textTokenTimer) clearTimeout(preFlush._textTokenTimer);
+        if (preFlush._textTokenBuffer) {
+          const buf = preFlush._textTokenBuffer;
+          const newText = preFlush.chatStreamingText + buf;
+          const segs = preFlush.streamingSegments;
+          let newSegs;
+          if (segs.length > 0 && segs[segs.length - 1].type === 'text') {
+            newSegs = [...segs];
+            newSegs[newSegs.length - 1] = { ...newSegs[newSegs.length - 1], content: newSegs[newSegs.length - 1].content + buf };
+          } else {
+            newSegs = [...segs, { type: 'text', content: buf }];
+          }
+          useAppStore.setState({ chatStreamingText: newText, streamingSegments: newSegs, _textTokenBuffer: null, _textTokenTimer: null });
+        }
+      }
       const state = useAppStore.getState();
       const segments = state.streamingSegments;
       const fileBlocks = state.streamingFileBlocks;
+      const finalToolCalls = state.streamingToolCalls;
+      const thinkingText = state.chatThinkingText || '';
 
       // Build text-only content for search/backwards compat
       let messageContent = '';
@@ -233,6 +555,9 @@ export default function ChatPanel() {
                 content: block.content,
               });
             }
+          } else if (seg.type === 'tool') {
+            // R40: Preserve tool segments in finalized message
+            messageSegments.push({ type: 'tool', toolIndex: seg.toolIndex });
           }
         }
       } else {
@@ -257,16 +582,20 @@ export default function ChatPanel() {
       if (fileBlocks.length > 0) {
         useAppStore.getState().clearFileContentBlocks();
       }
-      if (messageContent && messageContent.trim()) {
-        // R39-A1: Include tool calls in finalized message
-        const finalToolCalls = useAppStore.getState().streamingToolCalls;
+      // R40: Create message if there's text content OR tool calls
+      const hasContent = messageContent && messageContent.trim();
+      const hasToolCalls = finalToolCalls.length > 0;
+      if (hasContent || hasToolCalls) {
         useAppStore.getState().addChatMessage({
           role: 'assistant',
-          content: messageContent,
+          content: messageContent || '',
           // R35-L4: Structured data for rendering with FileContentBlock
           segments: messageSegments.length > 0 ? messageSegments : undefined,
           fileBlocks: messageFileBlocks.length > 0 ? messageFileBlocks : undefined,
-          toolCalls: finalToolCalls.length > 0 ? finalToolCalls : undefined,
+          toolCalls: hasToolCalls ? finalToolCalls : undefined,
+          thinking: thinkingText || undefined,
+          // R46-A: Store model name for display on finalized messages
+          model: useAppStore.getState().modelInfo?.name || undefined,
         });
       }
     } catch (err) {
@@ -371,120 +700,8 @@ export default function ChatPanel() {
           initialTopMostItemIndex={chatMessages.length > 0 ? chatMessages.length - 1 : 0}
           className="scrollbar-thin"
           components={{
-            Header: () => (
-              <>
-                {/* No model warning */}
-                {!modelLoaded && connected && (
-                  <div className="m-3 p-3 bg-vsc-sidebar rounded-lg border border-vsc-warning/20 text-vsc-sm">
-                    <div className="text-vsc-warning font-medium mb-1">No model loaded</div>
-                    <div className="text-vsc-text-dim text-vsc-xs">
-                      Load a GGUF model from the Settings panel to start chatting.
-                    </div>
-                  </div>
-                )}
-                {!connected && (
-                  <div className="m-3 p-3 bg-vsc-sidebar rounded-lg border border-vsc-error/20 text-vsc-sm">
-                    <div className="text-vsc-error font-medium mb-1">Not connected</div>
-                    <div className="text-vsc-text-dim text-vsc-xs">
-                      Waiting for backend server connection...
-                    </div>
-                  </div>
-                )}
-                {/* Todo list */}
-                {todos.length > 0 && (
-                  <div className="mx-3 mt-2 p-2 bg-vsc-sidebar rounded-lg border border-vsc-panel-border/50 text-vsc-xs">
-                    <div className="font-medium text-vsc-text mb-1">Task Progress</div>
-                    {todos.map(todo => (
-                      <div key={todo.id} className="flex items-center gap-1.5 py-0.5">
-                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                          todo.status === 'done' ? 'bg-vsc-success' :
-                          todo.status === 'in-progress' ? 'bg-vsc-accent' : 'bg-vsc-text-dim'
-                        }`} />
-                        <span className={todo.status === 'done' ? 'line-through text-vsc-text-dim' : 'text-vsc-text'}>
-                          {todo.text}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </>
-            ),
-            Footer: () => (
-              <>
-                {/* Streaming response */}
-                {chatStreaming && (
-                  <div className="chat-message assistant">
-                    <div className="text-vsc-xs text-vsc-text-dim mb-1 font-medium uppercase tracking-wider flex items-center gap-2">
-                      guIDE
-                      {chatIteration && chatIteration.iteration > 1 && (
-                        <span className="text-vsc-accent">Step {chatIteration.iteration}/{chatIteration.maxIterations}</span>
-                      )}
-                    </div>
-                    {chatThinkingText && (
-                      <div className="mb-2">
-                        <button
-                          className="flex items-center gap-1 text-vsc-xs text-vsc-text-dim hover:text-vsc-text"
-                          onClick={() => setThinkingExpanded(!thinkingExpanded)}
-                        >
-                          {thinkingExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                          <Brain size={12} />
-                          <span>Thinking...</span>
-                        </button>
-                        {thinkingExpanded && (
-                          <pre className="mt-1 p-2 bg-vsc-sidebar rounded text-vsc-xs text-vsc-text-dim overflow-auto max-h-[200px] whitespace-pre-wrap">
-                            {chatThinkingText}
-                          </pre>
-                        )}
-                      </div>
-                    )}
-                    {chatGeneratingTool && !chatGeneratingTool.done && (
-                      <div className="flex items-center gap-2 mb-2 text-vsc-xs text-vsc-accent">
-                        <Loader size={12} className="animate-spin" />
-                        <span>Generating: {chatGeneratingTool.functionName}</span>
-                      </div>
-                    )}
-                    {/* R39-A1: Render live tool call cards during streaming */}
-                    {streamingToolCalls.map((tc, i) => (
-                      <ToolCallCard key={`stc-${i}`} toolCall={tc} />
-                    ))}
-                    {/* R33-Phase4: Render segments chronologically for correct interleaving */}
-                    {streamingSegments.map((seg, i) => {
-                      if (seg.type === 'text' && seg.content && seg.content.trim()) {
-                        const isLastSeg = i === streamingSegments.length - 1;
-                        return (
-                          <div key={`seg-text-${i}`}>
-                            <MarkdownRenderer content={seg.content} streaming />
-                            {isLastSeg && <span className="streaming-cursor" />}
-                          </div>
-                        );
-                      }
-                      if (seg.type === 'file') {
-                        const block = streamingFileBlocks[seg.index];
-                        if (!block) return null;
-                        return (
-                          <FileContentBlock
-                            key={`seg-file-${seg.index}`}
-                            filePath={block.filePath}
-                            language={block.language}
-                            fileName={block.fileName}
-                            content={block.content}
-                            complete={block.complete}
-                          />
-                        );
-                      }
-                      return null;
-                    })}
-                    {!chatStreamingText && !chatThinkingText && streamingSegments.length === 0 && (
-                      <div className="flex items-center gap-1 py-2">
-                        <div className="w-1.5 h-1.5 bg-vsc-text-dim rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                        <div className="w-1.5 h-1.5 bg-vsc-text-dim rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                        <div className="w-1.5 h-1.5 bg-vsc-text-dim rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-                      </div>
-                    )}
-                  </div>
-                )}
-              </>
-            ),
+            Header: StreamingHeader,
+            Footer: StreamingFooter,
           }}
           itemContent={(idx, msg) => (
             <>
@@ -495,7 +712,13 @@ export default function ChatPanel() {
                   <button
                     className="flex items-center gap-1 text-[9px] text-vsc-text-dim/50 hover:text-vsc-text-dim px-1.5 py-0.5 rounded hover:bg-vsc-list-hover/30 transition-colors"
                     title="Restore conversation to this point"
-                    onClick={() => {/* stub */}}
+                    onClick={() => {
+                      // R46-D: Truncate chat to this checkpoint (keep messages up to the assistant reply before this user message)
+                      const truncated = chatMessages.slice(0, idx);
+                      useAppStore.setState({ chatMessages: truncated });
+                      // Clear streaming state in case it's active
+                      useAppStore.getState().setChatStreaming(false);
+                    }}
                   >
                     <RotateCcw size={8} />
                     <Clock size={8} />
@@ -517,7 +740,7 @@ export default function ChatPanel() {
                 <div className={`chat-message ${msg.role}`}>
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-vsc-xs font-medium uppercase tracking-wider text-vsc-text-dim">
-                      {msg.role === 'user' ? 'You' : 'guIDE'}
+                      {msg.role === 'user' ? 'You' : (msg.model || modelInfo?.name || 'guIDE').split('/').pop().split('-Q')[0]}
                     </span>
                     {msg.timestamp && (
                       <span className="text-[10px] text-vsc-text-dim/50">
@@ -532,17 +755,16 @@ export default function ChatPanel() {
                         <QuotaExceededPrompt needsAccount={msg.needsAccount} />
                       ) : (
                       <>
-                      {msg.toolCalls?.map((tc, i) => (
-                        <ToolCallCard key={i} toolCall={tc} />
-                      ))}
+                      {/* Persisted thinking block — shown collapsed for finalized messages */}
+                      {msg.thinking && <FinalizedThinkingBlock text={msg.thinking} />}
                       {/* R35-L4: Use segments + FileContentBlock for file blocks when available */}
-                      {msg.segments && msg.fileBlocks ? (
+                      {msg.segments && (msg.fileBlocks || msg.toolCalls) ? (
                         msg.segments.map((seg, i) => {
                           if (seg.type === 'text' && seg.content && seg.content.trim()) {
                             return <MarkdownRenderer key={`seg-${i}`} content={seg.content} />;
                           }
                           if (seg.type === 'file') {
-                            const block = msg.fileBlocks[seg.index];
+                            const block = msg.fileBlocks?.[seg.index];
                             if (!block) return null;
                             return (
                               <FileContentBlock
@@ -554,6 +776,27 @@ export default function ChatPanel() {
                                 complete={true}
                               />
                             );
+                          }
+                          if (seg.type === 'tool') {
+                            const tc = msg.toolCalls?.[seg.toolIndex];
+                            if (!tc) return null;
+                            // Duplicate collapse: skip if previous segment is same tool name
+                            if (i > 0) {
+                              const prev = msg.segments[i - 1];
+                              if (prev.type === 'tool') {
+                                const prevTc = msg.toolCalls?.[prev.toolIndex];
+                                if (prevTc && prevTc.functionName === tc.functionName) return null;
+                              }
+                            }
+                            let count = 1;
+                            for (let j = i + 1; j < msg.segments.length; j++) {
+                              const next = msg.segments[j];
+                              if (next.type !== 'tool') break;
+                              const nextTc = msg.toolCalls?.[next.toolIndex];
+                              if (!nextTc || nextTc.functionName !== tc.functionName) break;
+                              count++;
+                            }
+                            return <ToolCallCard key={`tool-${i}`} toolCall={tc} count={count} />;
                           }
                           return null;
                         })
@@ -1815,38 +2058,69 @@ function ProviderModelList({ provider, cloudProvider, cloudModel, selectCloudMod
 function TodoDropdown({ todos }) {
   const [expanded, setExpanded] = useState(false);
   const done = todos.filter(t => t.status === 'done').length;
-  const inProgress = todos.filter(t => t.status === 'in-progress').length;
   const total = todos.length;
   const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  const allDone = done === total;
+  const inProgress = todos.find(t => t.status === 'in-progress');
+
+  // Truncate active task text for collapsed header
+  const activeText = inProgress?.text
+    ? inProgress.text.length > 42 ? inProgress.text.slice(0, 42) + '...' : inProgress.text
+    : null;
 
   return (
     <div className="border-b border-vsc-panel-border/30">
       <button
-        className="w-full flex items-center gap-2 px-3 py-1.5 text-[10px] text-vsc-text-dim hover:bg-vsc-list-hover/50 transition-colors"
+        className="w-full flex items-center gap-1.5 px-2.5 py-1 text-[10px] transition-colors hover:bg-vsc-list-hover/50"
+        style={{ color: 'var(--vsc-text)' }}
         onClick={() => setExpanded(!expanded)}
       >
-        {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
-        <span className="font-medium">Tasks</span>
-        <span className="text-vsc-text-dim">{done}/{total}</span>
-        <div className="flex-1 h-1 bg-vsc-panel-border/30 rounded-full overflow-hidden ml-1">
-          <div
-            className="h-full bg-vsc-accent rounded-full transition-all duration-300"
-            style={{ width: `${pct}%` }}
-          />
-        </div>
-        <span className="text-vsc-text-dim">{pct}%</span>
+        <span className="flex-shrink-0 text-vsc-text-dim">
+          {expanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+        </span>
+        <ListTodo size={10} className="flex-shrink-0" style={{ color: allDone ? '#89d185' : 'var(--vsc-accent)' }} />
+        {activeText && !expanded ? (
+          <>
+            <span className="truncate min-w-0" style={{ color: '#dcdcaa' }}>{activeText}</span>
+            <span className="flex-shrink-0 ml-auto pl-2 text-vsc-text-dim">{done}/{total}</span>
+          </>
+        ) : (
+          <>
+            <span className="font-medium flex-shrink-0" style={{ color: allDone ? '#89d185' : 'var(--vsc-text)' }}>
+              {allDone ? 'Plan complete' : 'Plan'}
+            </span>
+            <span className="ml-1 flex-shrink-0 text-vsc-text-dim">{done}/{total}</span>
+            <div className="flex-1 mx-2 h-[3px] rounded-full overflow-hidden min-w-[24px]" style={{ backgroundColor: 'var(--vsc-selection, #264f78)' }}>
+              <div
+                className="h-full rounded-full transition-all duration-500"
+                style={{ width: `${pct}%`, backgroundColor: allDone ? '#89d185' : 'var(--vsc-accent)' }}
+              />
+            </div>
+          </>
+        )}
       </button>
       {expanded && (
-        <div className="px-3 pb-2 max-h-[120px] overflow-y-auto scrollbar-thin">
+        <div
+          className="px-2.5 pb-1 pt-0.5 space-y-0 overflow-y-auto scrollbar-thin"
+          style={{ borderTop: '1px solid var(--vsc-panel-border, #2d2d2d)', maxHeight: '150px' }}
+        >
           {todos.map(todo => (
-            <div key={todo.id} className="flex items-center gap-1.5 py-0.5 text-[10px]">
-              <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                todo.status === 'done' ? 'bg-vsc-success' :
-                todo.status === 'in-progress' ? 'bg-vsc-accent' : 'bg-vsc-text-dim/40'
-              }`} />
-              <span className={todo.status === 'done' ? 'line-through text-vsc-text-dim' : 'text-vsc-text'}>
-                {todo.text}
-              </span>
+            <div
+              key={todo.id}
+              className="flex items-start gap-1.5 py-[1px] text-[10px] transition-all duration-200"
+              style={{
+                color: todo.status === 'done' ? 'var(--vsc-text-dim)' : todo.status === 'in-progress' ? '#dcdcaa' : 'var(--vsc-text)',
+                textDecoration: todo.status === 'done' ? 'line-through' : 'none',
+                opacity: todo.status === 'done' ? 0.6 : 1,
+              }}
+            >
+              {todo.status === 'done'
+                ? <CheckCircle2 size={11} className="flex-shrink-0" style={{ color: '#89d185' }} />
+                : todo.status === 'in-progress'
+                  ? <Loader2 size={11} className="animate-spin flex-shrink-0" style={{ color: 'var(--vsc-accent)' }} />
+                  : <Circle size={11} className="flex-shrink-0 text-vsc-text-dim" />
+              }
+              <span className="leading-snug">{todo.text}</span>
             </div>
           ))}
         </div>
