@@ -226,6 +226,43 @@ ipcMain.handle('dialog-open-folder', async () => {
   return result.filePaths[0];
 });
 
+// ─── Model file picker IPC ──────────────────────────────────────────
+
+ipcMain.handle('dialog-models-add', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile', 'multiSelections'],
+    title: 'Select Model Files',
+    filters: [
+      { name: 'GGUF Models', extensions: ['gguf'] },
+      { name: 'All Files', extensions: ['*'] },
+    ],
+  });
+  if (result.canceled || !result.filePaths.length) return { success: false };
+
+  // Send selected paths to the backend to register them
+  try {
+    const http = require('http');
+    const body = JSON.stringify({ filePaths: result.filePaths });
+    await new Promise((resolve, reject) => {
+      const req = http.request({
+        hostname: '127.0.0.1', port: serverPort,
+        path: '/api/models/add', method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      }, (res) => {
+        let data = '';
+        res.on('data', c => data += c);
+        res.on('end', () => resolve(JSON.parse(data)));
+      });
+      req.on('error', reject);
+      req.write(body);
+      req.end();
+    });
+    return { success: true, filePaths: result.filePaths };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
 // ─── Reveal in file explorer IPC ────────────────────────────────────
 
 ipcMain.handle('shell-show-item', (_event, fullPath) => {

@@ -31,11 +31,11 @@ const RECOMMENDED_MODELS = [
     tier: 'recommended',
   },
   {
-    name: 'Qwen 3.5 32B',
-    desc: 'Maximum quality. Needs 24GB+ VRAM.',
-    size: '~20 GB',
-    hfRepo: 'unsloth/Qwen3.5-32B-GGUF',
-    hfFile: 'Qwen3.5-32B-Q4_K_M.gguf',
+    name: 'Qwen 3.5 27B',
+    desc: 'Maximum quality. Needs 20GB+ VRAM.',
+    size: '~16.7 GB',
+    hfRepo: 'unsloth/Qwen3.5-27B-GGUF',
+    hfFile: 'Qwen3.5-27B-Q4_K_M.gguf',
     tier: 'advanced',
   },
 ];
@@ -206,11 +206,13 @@ export default function WelcomeScreen() {
       {/* Logo + Brand */}
       <div className="flex flex-col items-center mt-14 mb-6 select-none relative z-10" style={anim(0.1)}>
         <div className="relative">
-          <img
-            src="/icon.ico"
-            alt="guIDE"
-            className="w-20 h-20 mb-4"
-            style={{ filter: 'drop-shadow(0 0 30px rgb(var(--guide-accent) / 0.5))' }}
+          <div
+            className="w-20 h-20 mb-4 bg-vsc-accent"
+            style={{
+              mask: 'url(/icon.png) center/contain no-repeat',
+              WebkitMask: 'url(/icon.png) center/contain no-repeat',
+              filter: 'drop-shadow(0 0 30px rgb(var(--guide-accent) / 0.5))',
+            }}
           />
           <div className="absolute inset-0 w-20 h-20 rounded-full animate-pulse"
                style={{ background: 'radial-gradient(circle, rgb(var(--guide-accent) / 0.15) 0%, transparent 70%)' }} />

@@ -5,12 +5,11 @@
  */
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import useAppStore from '../stores/appStore';
-import { Cpu, Search, Menu, ChevronRight, X } from 'lucide-react';
+import { Search, Menu, ChevronRight, X } from 'lucide-react';
 
 const wc = () => window.electronAPI?.windowControls;
 
 export default function TitleBar() {
-  const modelInfo = useAppStore(s => s.modelInfo);
   const projectPath = useAppStore(s => s.projectPath);
   const connected = useAppStore(s => s.connected);
   const fileTree = useAppStore(s => s.fileTree);
@@ -131,8 +130,11 @@ export default function TitleBar() {
           {openMenu ? <X size={14} /> : <Menu size={14} />}
         </button>
 
-        <img src="/icon.ico" alt="guIDE" className="w-4 h-4" />
-        <span className="font-brand text-[14px] tracking-wide text-vsc-accent">guIDE</span>
+        <div
+          className="w-4 h-4 flex-shrink-0 bg-vsc-accent"
+          style={{ mask: 'url(/icon.png) center/contain no-repeat', WebkitMask: 'url(/icon.png) center/contain no-repeat' }}
+          title="guIDE"
+        />
       </div>
 
       {/* Hamburger Panel */}
@@ -238,12 +240,6 @@ export default function TitleBar() {
       <div className="flex items-center gap-2 pr-2" style={{ WebkitAppRegion: 'no-drag' }}>
         <div className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-vsc-success' : 'bg-vsc-error'}`}
              title={connected ? 'Connected' : 'Disconnected'} />
-        {modelInfo && (
-          <div className="flex items-center gap-1 text-vsc-xs text-vsc-text-dim px-1.5 py-0.5 rounded bg-vsc-bg/50">
-            <Cpu size={10} />
-            <span className="truncate max-w-[120px]">{modelInfo.name}</span>
-          </div>
-        )}
       </div>
 
       {/* Window Controls */}

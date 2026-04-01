@@ -191,15 +191,13 @@ async function handleLocalChat(ctx, message, context, helpers) {
   // Build initial system prompt
   const systemPrompt = _buildSystemPrompt();
 
-  // Set or update system message in chatHistory
+  // Set or update system message in chatHistory.
+  // NOTE: Frontend always sends conversationHistory: [] for local model calls.
+  // Conversation state is maintained server-side via llmEngine.chatHistory.
+  // "New Chat" resets are handled by /api/session/clear -> resetSession(),
+  // which clears chatHistory to [system]. The first branch catches that state.
   if (!llmEngine.chatHistory || llmEngine.chatHistory.length === 0) {
     llmEngine.chatHistory = [{ type: 'system', text: systemPrompt }];
-  } else if (context?.conversationHistory?.length === 0) {
-    llmEngine.chatHistory = [{ type: 'system', text: systemPrompt }];
-    try {
-      if (llmEngine.sequence) llmEngine.sequence.clearHistory?.();
-      llmEngine.lastEvaluation = null;
-    } catch {}
   } else {
     const sysIdx = llmEngine.chatHistory.findIndex(h => h.type === 'system');
     if (sysIdx >= 0) llmEngine.chatHistory[sysIdx].text = systemPrompt;
@@ -252,7 +250,6 @@ async function handleLocalChat(ctx, message, context, helpers) {
   const recentToolSigs = [];         // Track tool call signatures for stuck/cycle detection
   const toolExecCache = new Map();   // Cross-iteration dedup: signature → { iteration, resultSummary }
   const DEDUP_EXEMPT_TOOLS = new Set(['write_file', 'append_to_file', 'edit_file', 'write_todos', 'update_todo', 'run_command', 'web_search', 'browser_navigate', 'browser_click', 'browser_type']);
-  let lastIterContentStreamed = false; // R16-Fix-C: true when previous iteration completed a content-streamed write_file
   let postShiftStutterRetries = 0;   // T23-Fix: retry count for post-context-shift stutter detection
   let salvageUsed = false;           // T32-Fix: true when salvage path extracted content from failed JSON parse
   let d6RetryCount = 0;              // R27-A: D6 give-up retry counter (was this._d6RetryCount — crashed because this is undefined)
@@ -2035,13 +2032,10 @@ async function handleLocalChat(ctx, message, context, helpers) {
         }
       }
 
-      // R16-Fix-C: Track if this iteration was a content-streamed file write.
-      // The D5/unclosed-fence check operates on fullResponseText which doesn't
-      // include the content-streamed fences. Must skip D5 in the next iteration.
-      lastIterContentStreamed = stream.wasContentStreamed();
-
       continue;
     }
+
+    console.log(`[AgenticLoop] Post-tool-branch: toolCalls=${toolCalls.length}, stopReason=${result.stopReason}, rotationCheckpoint=${!!rotationCheckpoint}, fullResponseText=${fullResponseText.length} chars`);
 
     // ── R26-D6: Detect model give-up and retry ─────────────
     // When the model outputs "I can't complete" / "I apologize" with no tool calls,
@@ -2082,7 +2076,17 @@ async function handleLocalChat(ctx, message, context, helpers) {
       // ``` from iteration 1, giving the correct fence parity.
       const fenceCount = (fullResponseText.match(/^```/gm) || []).length;
       const midFence = fenceCount % 2 !== 0;
-      if (midFence) console.log('[AgenticLoop]   Mid-fence detected — response was inside a code block');
+      if (midFence) {
+        console.log('[AgenticLoop]   Mid-fence detected — response was inside a code block');
+        // Track inline code blocks so completion detection works after
+        // content-streamed iterations (R16-Fix-C won't skip D5 check).
+        if (!rotationCheckpoint && !pendingToolCallBuffer) {
+          // Extract the fence language label from fullResponseText for content-type tracking
+          const lastFenceMatch = fullResponseText.match(/```([a-zA-Z-]*)\s*\n(?:.(?!```))*$/s);
+          const fenceLang = lastFenceMatch ? lastFenceMatch[1] : '';
+          console.log(`[AgenticLoop]   Inline code checkpoint set (lang: ${fenceLang || 'unknown'}, ${fullResponseText.length} chars)`);
+        }
+      }
 
       // Use fullResponseText for tail context so continuationMessage gets the
       // tail of the ENTIRE accumulated output, not just this iteration's text.
@@ -2090,27 +2094,39 @@ async function handleLocalChat(ctx, message, context, helpers) {
       continue;
     }
 
+    // ── R31-Fix Phase 1: Completion check resolution ───────────────────────
+    // When fileCompletionCheckPending was set (model was asked to check if file
+    // is complete), resolve it here before the D5/continuation checks run.
+    if (fileCompletionCheckPending) {
+      if (toolCalls.length === 0) {
+        // Model responded with summary prose (no more tool calls) — file is done or stuck
+        if (rotationCheckpoint && _isContentStructurallyComplete(rotationCheckpoint.content, rotationCheckpoint.filePath)) {
+          console.log('[AgenticLoop] R42-Fix-3: File structurally complete — nulling rotationCheckpoint');
+          rotationCheckpoint = null;
+          stream._keepFileContentAlive = false;
+        } else if (rotationCheckpoint) {
+          console.log('[AgenticLoop] R42-Fix-3: File still incomplete — keeping rotationCheckpoint alive');
+          stream._keepFileContentAlive = true;
+        }
+      } else {
+        console.log('[AgenticLoop] R31-Fix: Completion check response has tool calls — model is continuing, proceeding normally');
+      }
+      fileCompletionCheckPending = false;
+    }
+
     // ── S7-9B + D5: Natural stop with unclosed code fence → force continuation ──
     // If the model emitted eogToken but the accumulated response has an unclosed
     // code block (odd fence parity), the file is incomplete. Force continuation
     // so the model can complete and close the block. Safety-limited to 3 retries.
-    // D5 fix: discard the current iteration's output from fullResponseText before
-    // computing the continuation tail. The model stopped naturally (eogToken) while
-    // the fence was unclosed — it was confused. Its output from this confused state
-    // (often summary text, status updates, or restarted content) would corrupt the
-    // continuation anchor if kept.
     //
-    // R16-Fix-C: Skip this check entirely if the PREVIOUS iteration was a
-    // content-streamed file write. Content-streamed fences go to the frontend
-    // (streamingText) but NOT to fullResponseText. The parity on fullResponseText
-    // is stale/wrong — any fence in the current iteration's output would look
-    // "unclosed" when in reality the content fence was closed by finalize().
-    if (!lastIterContentStreamed) {
+    // Skip this check if the previous iteration was a content-streamed file write.
+    // Content-streamed fences go to the frontend but NOT to fullResponseText.
+    // The parity on fullResponseText would be stale/wrong.
+    if (!stream.wasContentStreamed()) {
       const fenceLines = (fullResponseText.match(/^```/gm) || []).length;
       if (fenceLines % 2 !== 0 && unclosedFenceRetries < 3) {
         // D5: Remove the current iteration's text from accumulated response
         const currentIterText = rawText || '';
-        // Check for partial write_file before discarding — used for targeted continuation
         const partialWriteFileMatch = currentIterText.match(/"tool"\s*:\s*"write_file"[\s\S]*?"(?:filePath|file_path|path|filename|file_name|file)"\s*:\s*"([^"]+)"/);
         const partialWriteFilePath = partialWriteFileMatch ? partialWriteFileMatch[1] : null;
 
@@ -2119,16 +2135,12 @@ async function handleLocalChat(ctx, message, context, helpers) {
           displayResponseText = displayResponseText.slice(0, -((displayText || currentIterText).length));
           console.log(`[AgenticLoop]   D5: Discarded ${currentIterText.length} chars of confused iteration output`);
           if (partialWriteFilePath) console.log(`[AgenticLoop]   D5: Partial write_file detected for "${partialWriteFilePath}"`);
-          // Also clean the frontend buffer — prevents junk from false-positive
-          // releases rendering as phantom code blocks in the chat
           stream.replaceLast('');
         }
         console.log(`[AgenticLoop]   Natural stop with unclosed code fence (${fenceLines} fences) — forcing continuation (retry ${unclosedFenceRetries + 1}/3)`);
         unclosedFenceRetries++;
         continuationCount++;
 
-        // If a partial write_file was discarded, give the model a targeted message
-        // so it uses append_to_file to continue rather than restarting the whole file.
         if (partialWriteFilePath) {
           nextUserMessage = `Your write_file call for "${partialWriteFilePath}" was cut off before finishing. The file is still incomplete. Use append_to_file to add the remaining content. Continue from where the data was cut off — do NOT use write_file again and do NOT restart the file.`;
         } else {
@@ -2136,195 +2148,23 @@ async function handleLocalChat(ctx, message, context, helpers) {
         }
         continue;
       }
-    } else {
-      // R16-Fix-C: Previous iteration was content-streamed — skip fence check.
-      // Clear the flag so it doesn't affect subsequent iterations.
-      console.log('[AgenticLoop] R16-Fix-C: Skipping D5/unclosed-fence check (previous iteration was content-streamed file write)');
-      lastIterContentStreamed = false;
-
-      // R31-Fix Phase 1: When a completion check was pending and model responded
-      // with no tool calls (= summary prose), null the checkpoint so Fix-M can't fire.
-      // If model DID produce tool calls, it's continuing — clear flag and proceed normally.
-      if (fileCompletionCheckPending && toolCalls.length === 0) {
-        // R42-Fix-3: Only null rotationCheckpoint if file is structurally complete.
-        // If file is still incomplete, keep the checkpoint alive so continuation can resume.
-        if (rotationCheckpoint && _isContentStructurallyComplete(rotationCheckpoint.content, rotationCheckpoint.filePath)) {
-          console.log('[AgenticLoop] R42-Fix-3: File structurally complete — nulling rotationCheckpoint');
-          rotationCheckpoint = null;
-          stream._keepFileContentAlive = false;
-        } else {
-          console.log('[AgenticLoop] R42-Fix-3: File still incomplete — keeping rotationCheckpoint alive');
-          stream._keepFileContentAlive = true;
-        }
-        fileCompletionCheckPending = false;
-      } else if (fileCompletionCheckPending) {
-        console.log('[AgenticLoop] R31-Fix: Completion check response has tool calls — model is continuing, proceeding normally');
-        fileCompletionCheckPending = false;
-      }
-
-      // R38: State-based routing for suspended content and raw continuation.
-      // Replaces the old R35-L2 keyword heuristic (looksLikeCode/looksLikeProse)
-      // and Fix-M keyword heuristic with a definitive state-based decision:
-      // When rotationCheckpoint exists AND the file is structurally incomplete,
-      // ALL raw output is file continuation. No guessing. No keyword detection.
-      const _r38FileIncomplete = rotationCheckpoint && rotationCheckpoint.filePath &&
-        !_isContentStructurallyComplete(rotationCheckpoint.content, rotationCheckpoint.filePath);
-      let _r38DiskHandled = false; // Prevents double-append when both suspense and Fix-M fire
-
-      // ── Suspended content routing ──
-      if (stream.hasSuspendedContent()) {
-        const suspended = stream.getSuspendedContent();
-        if (_r38FileIncomplete) {
-          console.log(`[AgenticLoop] R38: Suspended content (${suspended.length} chars) → file content (checkpoint active, file incomplete)`);
-          stream.resolveSuspense(true);
-          // Append to disk — content was buffered during streaming, never reached disk
-          try {
-            let contentToAppend = suspended;
-            // Strip markdown fences the model may have wrapped continuation in
-            contentToAppend = contentToAppend.replace(/^```[a-zA-Z-]*\n/, '').replace(/\n```\s*$/, '');
-            // Overlap detection: strip leading chars that duplicate checkpoint tail
-            if (rotationCheckpoint.content) {
-              const tail = rotationCheckpoint.content.slice(-50);
-              for (let overlapLen = Math.min(50, contentToAppend.length); overlapLen >= 3; overlapLen--) {
-                if (tail.endsWith(contentToAppend.slice(0, overlapLen))) {
-                  contentToAppend = contentToAppend.slice(overlapLen);
-                  console.log(`[AgenticLoop] R38: Stripped ${overlapLen} chars of overlap from suspended content`);
-                  break;
-                }
-              }
-            }
-            if (contentToAppend.length > 0) {
-              await mcpToolServer.executeTool('append_to_file', { filePath: rotationCheckpoint.filePath, content: contentToAppend });
-              rotationCheckpoint.content += contentToAppend;
-              console.log(`[AgenticLoop] R38: Appended ${contentToAppend.length} chars to "${rotationCheckpoint.filePath}" (total: ${rotationCheckpoint.content.length} chars)`);
-              stream.fileAccUpdate(rotationCheckpoint.filePath, rotationCheckpoint.content);
-              allToolResults.push({ tool: 'append_to_file', params: { filePath: rotationCheckpoint.filePath, content: contentToAppend }, result: { success: true } });
-              _r38DiskHandled = true;
-            }
-          } catch (e) {
-            console.log(`[AgenticLoop] R38: Append suspended content failed: ${e.message}`);
-          }
-        } else {
-          console.log(`[AgenticLoop] R38: Suspended content (${suspended.length} chars) → text (no active incomplete file)`);
-          stream.resolveSuspense(false);
-        }
-      }
-
-      // ── Fix-M: Raw continuation content to disk ──
-      // When the model outputs raw text (no tool call) and a file is in progress,
-      // append it to disk. Only fires when suspense resolution didn't already handle it.
-      if (!_r38DiskHandled && rotationCheckpoint && rawText.length > 20 && toolCalls.length === 0 && _r38FileIncomplete) {
-        let contentToAppend = rawText;
-
-        // R26-D2a: Detect and unwrap tool call envelope in rawText.
-        // When the model outputs a malformed tool call (parser returns toolCalls=0),
-        // the envelope text ends up in rawText. Extract just the content field.
-        const envelopeMatch = rawText.match(/"tool"\s*:\s*"(write_file|append_to_file|create_file)"/);
-        if (envelopeMatch) {
-          let extracted = extractContentFromPartialToolCall(rawText);
-          if (!extracted || extracted.length < 50) {
-            const unquotedMatch = rawText.match(/"content"\s*:\s*/);
-            if (unquotedMatch) {
-              const afterContent = rawText.substring(unquotedMatch.index + unquotedMatch[0].length);
-              if (afterContent.length > 0 && afterContent[0] !== '"') {
-                extracted = afterContent
-                  .replace(/\s*}\s*}\s*```?\s*$/, '')
-                  .replace(/\s*}\s*```?\s*$/, '')
-                  .replace(/["';,\s]*\]\s*}\s*$/, '')
-                  .replace(/["';,\s]*\]\s*$/, '')
-                  .replace(/\n*```\s*$/, '');
-              }
-            }
-          }
-          if (extracted && extracted.length >= 50) {
-            console.log(`[AgenticLoop] R38/R26-D2a: Extracted ${extracted.length} chars from tool envelope (raw was ${rawText.length} chars)`);
-            contentToAppend = extracted;
-          }
-        }
-
-        // Overlap detection: strip leading chars that duplicate checkpoint tail
-        if (rotationCheckpoint.content) {
-          const tail = rotationCheckpoint.content.slice(-50);
-          for (let overlapLen = Math.min(50, contentToAppend.length); overlapLen >= 3; overlapLen--) {
-            if (tail.endsWith(contentToAppend.slice(0, overlapLen))) {
-              contentToAppend = contentToAppend.slice(overlapLen);
-              console.log(`[AgenticLoop] R38/Fix-M: Stripped ${overlapLen} chars of overlap`);
-              break;
-            }
-          }
-        }
-
-        // Strip markdown code fences
-        contentToAppend = contentToAppend.replace(/^```[a-zA-Z-]*\n/, '').replace(/\n```\s*$/, '');
-
-        // R39-B1: Strip prose preamble before code.
-        // After context shift, model often outputs narrative ("I'll continue building...")
-        // before the actual code. Detect where code starts based on file extension syntax.
-        if (contentToAppend.length > 0 && rotationCheckpoint.filePath) {
-          const ext = rotationCheckpoint.filePath.split('.').pop().toLowerCase();
-          const lines = contentToAppend.split('\n');
-          let codeStartIdx = 0;
-          const syntaxTests = {
-            html: (l) => /^\s*<|<!DOCTYPE/i.test(l),
-            htm: (l) => /^\s*<|<!DOCTYPE/i.test(l),
-            css: (l) => /[{:;@]|^\s*[.#*]|^\s*[a-z-]+\s*\{/i.test(l),
-            js: (l) => /[=({;]|^\s*(function|const|let|var|import|export|\/\/|\/\*|if|for|while|return|class)\b/.test(l),
-            jsx: (l) => /[=({;]|^\s*(function|const|let|var|import|export|\/\/|\/\*|if|for|while|return|class)\b/.test(l),
-            ts: (l) => /[=({;]|^\s*(function|const|let|var|import|export|\/\/|\/\*|if|for|while|return|class|interface|type)\b/.test(l),
-            tsx: (l) => /[=({;]|^\s*(function|const|let|var|import|export|\/\/|\/\*|if|for|while|return|class|interface|type)\b/.test(l),
-            py: (l) => /[=({:]|^\s*(def|class|import|from|if|for|while|return|#|@)\b/.test(l),
-            json: (l) => /^\s*[{\[]/.test(l),
-            yaml: (l) => /^\s*[a-z_-]+\s*:/i.test(l),
-            yml: (l) => /^\s*[a-z_-]+\s*:/i.test(l),
-          };
-          const test = syntaxTests[ext];
-          if (test) {
-            for (let i = 0; i < Math.min(lines.length, 15); i++) {
-              if (lines[i].trim() === '') continue;
-              if (test(lines[i])) {
-                codeStartIdx = i;
-                break;
-              }
-              codeStartIdx = i + 1; // skip this prose line
-            }
-            if (codeStartIdx > 0 && codeStartIdx < lines.length) {
-              const stripped = lines.slice(0, codeStartIdx).join('\n');
-              contentToAppend = lines.slice(codeStartIdx).join('\n');
-              console.log(`[AgenticLoop] R39-B1: Stripped ${codeStartIdx} prose lines before code: "${stripped.slice(0, 80)}..."`);
-            }
-          }
-        }
-
-        if (contentToAppend.length > 0) {
-          try {
-            await mcpToolServer.executeTool('append_to_file', { filePath: rotationCheckpoint.filePath, content: contentToAppend });
-            rotationCheckpoint.content += contentToAppend;
-            console.log(`[AgenticLoop] R38/Fix-M: Appended ${contentToAppend.length} chars to "${rotationCheckpoint.filePath}" (total: ${rotationCheckpoint.content.length} chars)`);
-            stream.fileAccUpdate(rotationCheckpoint.filePath, rotationCheckpoint.content);
-            allToolResults.push({ tool: 'append_to_file', params: { filePath: rotationCheckpoint.filePath, content: contentToAppend }, result: { success: true } });
-          } catch (e) {
-            console.log(`[AgenticLoop] R38/Fix-M: Append failed: ${e.message}`);
-          }
-        }
-      }
     }
 
-    // ── R38-Fix-C: Force continuation when file is structurally incomplete ──
+    // ── R38-Fix-C: Force ONE continuation when file is structurally incomplete ──
     // When the model stops naturally (eogToken) but the file on disk is not
-    // structurally complete (e.g., HTML without </html>), force continuation
-    // instead of accepting the stop. The model may have emitted eogToken
-    // prematurely due to context pressure or model limitations.
+    // structurally complete (e.g., HTML without </html>), force one continuation
+    // retry asking the model to use append_to_file. If it doesn't comply, accept.
     if (rotationCheckpoint && rotationCheckpoint.filePath &&
         result.stopReason === 'natural' && toolCalls.length === 0 &&
         !_isContentStructurallyComplete(rotationCheckpoint.content, rotationCheckpoint.filePath) &&
-        eogStructuralRetries < 5) {
+        eogStructuralRetries < 1) {
       eogStructuralRetries++;
       continuationCount++;
       const cpContent = rotationCheckpoint.content;
       const lineCount = (cpContent.match(/\n/g) || []).length + 1;
       const tailLines = cpContent.split('\n').slice(-30).join('\n');
 
-      // R39-B3: Include structural analysis — tell model what's missing
+      // Include structural analysis — tell model what's missing
       const ext = rotationCheckpoint.filePath.split('.').pop().toLowerCase();
       let missingParts = '';
       if (['html', 'htm'].includes(ext)) {
@@ -2337,11 +2177,18 @@ async function handleLocalChat(ctx, message, context, helpers) {
         if (missing.length > 0) missingParts = ` Missing elements: ${missing.join(', ')}.`;
       }
 
-      console.log(`[AgenticLoop] R38-Fix-C: File "${rotationCheckpoint.filePath}" structurally incomplete (${lineCount} lines) after eogToken — forcing continuation (retry ${eogStructuralRetries}/5)`);
+      // Re-prompt mechanism: if the model output raw text (code without tool wrapper),
+      // include it in the continuation so the model can wrap it in append_to_file
+      // instead of regenerating from scratch. Truncate to 2000 chars to stay within budget.
+      const rawSnippet = rawText.trim().length > 50
+        ? `\n\nYou already output the following content but did NOT wrap it in a tool call:\n---\n${rawText.trim().slice(0, 2000)}\n---\nUse append_to_file to save this content to "${rotationCheckpoint.filePath}" and then continue writing the rest.`
+        : '';
+
+      console.log(`[AgenticLoop] R38-Fix-C: File "${rotationCheckpoint.filePath}" structurally incomplete (${lineCount} lines) after eogToken — forcing continuation (retry ${eogStructuralRetries}/1)${rawSnippet ? ` [re-prompt: ${rawText.trim().length} chars of raw output included]` : ''}`);
       nextUserMessage = `The file "${rotationCheckpoint.filePath}" is NOT complete (${lineCount} lines so far).${missingParts} ` +
         `Continue writing the remaining content using append_to_file. Output ONLY code — no commentary, no preamble. ` +
         `The file currently ends with:\n${tailLines}\n\n` +
-        `Continue IMMEDIATELY after this content. Do NOT restart. Do NOT repeat existing content.`;
+        `Continue IMMEDIATELY after this content. Do NOT restart. Do NOT repeat existing content.${rawSnippet}`;
       continue;
     }
 
@@ -2357,6 +2204,7 @@ async function handleLocalChat(ctx, message, context, helpers) {
 
     _reportTokenStats(totalTokensUsed, mainWindow);
 
+    console.log(`[AgenticLoop] Natural completion — returning success (${fullResponseText.length} chars, ${allToolResults.length} tool results)`);
     stream.endFileContent();
     return {
       success: true,

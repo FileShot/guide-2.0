@@ -79,10 +79,21 @@ function continuationMessage(taskContext) {
   let msg = goalPrefix + 'Continue exactly where you left off.';
 
   if (taskContext.midFence) {
-    msg += ' You are INSIDE a code block — output ONLY code, no text or summaries.';
-  }
-
-  if (taskContext.lastText) {
+    // Detect content type from tail for better anchoring
+    const tail = (taskContext.lastText || '').slice(-800);
+    let contentHint = '';
+    if (/<[a-zA-Z][^>]*>/.test(tail) || /<\/[a-zA-Z]+>/.test(tail)) {
+      contentHint = ' You are writing HTML/markup.';
+    } else if (/function\s|const\s|import\s|export\s|=>/.test(tail)) {
+      contentHint = ' You are writing JavaScript/TypeScript.';
+    } else if (/def\s|class\s|import\s.*:/.test(tail)) {
+      contentHint = ' You are writing Python.';
+    }
+    msg += ` You are INSIDE a code block.${contentHint} Output ONLY raw code continuing the same block. Do NOT use tool calls. Do NOT start a new file or code block. Do NOT add commentary or descriptions.`;
+    if (tail) {
+      msg += `\nEnds with:\n${tail}`;
+    }
+  } else if (taskContext.lastText) {
     const tail = (taskContext.lastText || '').slice(-400);
     msg += `\nEnds with:\n${tail}`;
   }

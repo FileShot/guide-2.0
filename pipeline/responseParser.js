@@ -249,6 +249,33 @@ function parseToolCallJson(jsonStr) {
   try {
     return normalizeToolCalls(JSON.parse(jsonStr));
   } catch {
+    // Small models sometimes double-escape quotes in tool call JSON, producing
+    // {"tool":"read_file","params\":{\"filePath\":\"src/app.js\"}} instead of
+    // {"tool":"read_file","params":{"filePath":"src/app.js"}}.
+    // For short tool calls (not write_file with content), de-escape and retry.
+    if (jsonStr.length < 1000 && jsonStr.includes('\\"')) {
+      try {
+        const deescaped = jsonStr.replace(/\\"/g, '"');
+        const result = normalizeToolCalls(JSON.parse(deescaped));
+        if (result.length > 0) return result;
+      } catch { /* fall through */ }
+    }
+
+    // Models sometimes output multiple JSON objects on separate lines instead of
+    // a JSON array: {"tool":"find_files",...}\n{"tool":"list_directory",...}
+    // JSON.parse only handles one value. Split by lines and parse each.
+    const lines = jsonStr.split('\n').map(l => l.trim()).filter(l => l.startsWith('{'));
+    if (lines.length > 1) {
+      const results = [];
+      for (const line of lines) {
+        try {
+          const parsed = JSON.parse(line);
+          results.push(...normalizeToolCalls(parsed));
+        } catch { /* skip unparseable lines */ }
+      }
+      if (results.length > 0) return results;
+    }
+
     // Try fixing truncated JSON (missing closing brackets)
     const fixed = tryFixJson(jsonStr);
     return fixed ? normalizeToolCalls(fixed) : [];

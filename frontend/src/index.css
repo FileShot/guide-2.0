@@ -175,6 +175,7 @@
     @apply h-[22px] flex items-center px-2 text-[11px] uppercase tracking-wider font-bold;
     @apply bg-vsc-sidebar text-vsc-text cursor-pointer select-none;
     @apply hover:bg-vsc-list-hover transition-colors duration-150;
+    border-bottom: 1px solid rgb(var(--guide-panel-border) / 0.12);
   }
 
   /* ─── File Tree ─────────────────────────────────────── */
@@ -191,7 +192,7 @@
   .file-tree-item.active {
     @apply bg-vsc-list-active text-vsc-text-bright;
     border-left-color: rgb(var(--guide-accent));
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15) inset;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15) inset, 0 0 6px rgb(var(--guide-accent) / 0.08);
   }
   .file-tree-item.focused {
     @apply bg-vsc-list-focus;
@@ -247,10 +248,12 @@
   .chat-message.user {
     @apply bg-vsc-list-hover/60;
     border-bottom: 1px solid rgb(var(--guide-panel-border) / 0.15);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
   }
   .chat-message.assistant {
     @apply bg-transparent;
     border-bottom: 1px solid rgb(var(--guide-panel-border) / 0.08);
+    box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
   }
 
   .chat-message pre {

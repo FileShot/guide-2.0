@@ -368,11 +368,31 @@ function WelcomeScreen() {
   };
 
   return (
-    <div className="welcome-tab">
-      <h1 className="font-brand text-vsc-accent">guIDE</h1>
-      <p>Local-first AI-powered IDE. Zero cloud dependency.</p>
+    <div className="welcome-tab relative overflow-hidden">
+      {/* Animated wavy lines — thin dashed strokes, theme-reactive */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <svg className="absolute bottom-0 left-0 w-full h-full" viewBox="0 0 1200 400" preserveAspectRatio="none">
+          <path fill="none" stroke="currentColor" className="text-vsc-accent" strokeWidth="0.8" strokeDasharray="10 8" opacity="0.10"
+            d="M-100,300 C50,260 200,340 400,280 C600,220 800,320 1000,270 C1200,220 1350,300 1500,260">
+            <animateTransform attributeName="transform" type="translate" values="0,0;-30,0;0,0" dur="25s" repeatCount="indefinite" />
+          </path>
+          <path fill="none" stroke="currentColor" className="text-vsc-accent" strokeWidth="0.6" strokeDasharray="6 12" opacity="0.06"
+            d="M-50,365 C100,330 250,385 450,340 C650,295 850,370 1050,325 C1250,280 1400,355 1550,315">
+            <animateTransform attributeName="transform" type="translate" values="0,0;20,0;0,0" dur="35s" repeatCount="indefinite" />
+          </path>
+        </svg>
+        {/* Radial glow behind content */}
+        <div className="absolute top-1/3 left-1/2 -translate-x-1/2 w-[300px] h-[200px] rounded-full bg-vsc-accent/[0.03]" style={{ filter: 'blur(80px)' }} />
+      </div>
 
-      <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-4 w-full max-w-xl mx-auto text-left">
+      <div
+        className="relative z-10 w-12 h-12 mb-3 bg-vsc-accent mx-auto"
+        style={{ mask: 'url(/icon.png) center/contain no-repeat', WebkitMask: 'url(/icon.png) center/contain no-repeat' }}
+      />
+      <h1 className="font-brand text-vsc-accent relative z-10">guIDE</h1>
+      <p className="relative z-10">Local-first AI-powered IDE. Zero cloud dependency.</p>
+
+      <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-4 w-full max-w-xl mx-auto text-left relative z-10">
         {/* Start */}
         <div>
           <h3 className="text-vsc-xs font-semibold text-vsc-text-dim uppercase tracking-wider mb-2">Start</h3>
@@ -412,7 +432,7 @@ function WelcomeScreen() {
         </div>
       </div>
 
-      <p className="mt-8 text-[10px] text-vsc-text-dim/50">guIDE 2.0 — Built for local AI inference</p>
+      <p className="mt-8 text-[10px] text-vsc-text-dim/50 relative z-10">guIDE — Built for local AI inference</p>
     </div>
   );
 }

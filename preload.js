@@ -20,6 +20,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   openFolderDialog: () => ipcRenderer.invoke('dialog-open-folder'),
   showItemInFolder: (fullPath) => ipcRenderer.invoke('shell-show-item', fullPath),
+  modelsAdd: () => ipcRenderer.invoke('dialog-models-add'),
+  modelsScan: () => ipcRenderer.invoke('models-scan'),
+  openExternal: (url) => ipcRenderer.invoke('shell-open-external', url),
+  showOpenDialog: () => ipcRenderer.invoke('dialog-open-folder'),
   onMenuAction: (callback) => {
     ipcRenderer.on('menu-action', (_event, action) => callback(action));
   },

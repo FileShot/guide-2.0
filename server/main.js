@@ -463,13 +463,11 @@ app.get('/api/models/recommend', async (req, res) => {
     const maxModelGB = vramMB > 0 ? Math.floor((vramMB * 0.85) / 1024) : 4;
     // Curated recommended models list
     const recommended = [
-      { name: 'Qwen 3 0.6B', file: 'Qwen3-0.6B-Q8_0.gguf', size: 0.8, desc: 'Tiny, ultra-fast', downloadUrl: 'https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf', tags: ['general'] },
-      { name: 'Qwen 3 1.7B', file: 'Qwen3-1.7B-Q8_0.gguf', size: 1.9, desc: 'Small, fast', downloadUrl: 'https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q8_0.gguf', tags: ['general'] },
-      { name: 'Qwen 3 4B', file: 'Qwen3-4B-Q8_0.gguf', size: 4.5, desc: 'Great balance', downloadUrl: 'https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q8_0.gguf', tags: ['coding', 'general'] },
-      { name: 'Qwen 3 8B', file: 'Qwen3-8B-Q4_K_M.gguf', size: 5.0, desc: 'Strong all-rounder', downloadUrl: 'https://huggingface.co/unsloth/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf', tags: ['coding', 'reasoning'] },
-      { name: 'Qwen 3 14B', file: 'Qwen3-14B-Q4_K_M.gguf', size: 8.7, desc: 'High quality', downloadUrl: 'https://huggingface.co/unsloth/Qwen3-14B-GGUF/resolve/main/Qwen3-14B-Q4_K_M.gguf', tags: ['coding', 'reasoning'] },
-      { name: 'Qwen 3 30B-A3B (MoE)', file: 'Qwen3-30B-A3B-Q4_K_M.gguf', size: 18.4, desc: 'MoE, fast for size', downloadUrl: 'https://huggingface.co/unsloth/Qwen3-30B-A3B-GGUF/resolve/main/Qwen3-30B-A3B-Q4_K_M.gguf', tags: ['coding', 'reasoning'] },
-      { name: 'Qwen 3 32B', file: 'Qwen3-32B-Q4_K_M.gguf', size: 20.0, desc: 'Flagship quality', downloadUrl: 'https://huggingface.co/unsloth/Qwen3-32B-GGUF/resolve/main/Qwen3-32B-Q4_K_M.gguf', tags: ['coding', 'reasoning', 'general'] },
+      { name: 'Qwen 3.5 0.8B', file: 'Qwen3.5-0.8B-Q8_0.gguf', size: 0.8, desc: 'Tiny, ultra-fast', downloadUrl: 'https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-Q8_0.gguf', tags: ['general'] },
+      { name: 'Qwen 3.5 4B', file: 'Qwen3.5-4B-Q8_0.gguf', size: 4.5, desc: 'Great balance', downloadUrl: 'https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q8_0.gguf', tags: ['coding', 'general'] },
+      { name: 'Qwen 3.5 9B', file: 'Qwen3.5-9B-Q4_K_M.gguf', size: 5.7, desc: 'Strong all-rounder', downloadUrl: 'https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf', tags: ['coding', 'reasoning'] },
+      { name: 'Qwen 3.5 27B', file: 'Qwen3.5-27B-Q4_K_M.gguf', size: 16.7, desc: 'High quality', downloadUrl: 'https://huggingface.co/unsloth/Qwen3.5-27B-GGUF/resolve/main/Qwen3.5-27B-Q4_K_M.gguf', tags: ['coding', 'reasoning'] },
+      { name: 'Qwen 3.5 35B-A3B (MoE)', file: 'Qwen3.5-35B-A3B-Q4_K_M.gguf', size: 22.0, desc: 'MoE, fast for size', downloadUrl: 'https://huggingface.co/unsloth/Qwen3.5-35B-A3B-GGUF/resolve/main/Qwen3.5-35B-A3B-Q4_K_M.gguf', tags: ['coding', 'reasoning'] },
     ];
     const fits = recommended.filter(m => m.size <= maxModelGB);
     const other = recommended.filter(m => m.size > maxModelGB);

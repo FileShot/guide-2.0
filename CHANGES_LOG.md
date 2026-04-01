@@ -4,6 +4,213 @@
 
 ---
 
+## 2026-03-31 — Fix malformed tool call JSON + diagnostic logging + multi-JSON parsing
+
+### Fix 1: De-escape malformed JSON in parseToolCallJson
+**File:** `pipeline/responseParser.js` function `parseToolCallJson` (lines 245-270)
+- **Symptom:** Small models (Qwen3.5-2B) produce tool call JSON with literal backslash-quotes:
+  `{"tool":"read_file","params\":{\"filePath\":\"src/app.js\"}}` instead of proper JSON.
+  JSON.parse fails, tryFixJson also fails (handles missing brackets but not structural `\"`),
+  tool call never executes, raw JSON leaks into UI, model never gets tool result.
+- **Root cause:** `parseToolCallJson` had no de-escaping layer between JSON.parse and tryFixJson.
+- **Change:** After initial JSON.parse failure, for short strings (<1000 chars) containing `\"`,
+  try `JSON.parse(jsonStr.replace(/\\"/g, '"'))`. If it produces valid tool calls, return them.
+  Falls through to tryFixJson if de-escaping doesn't help.
+  Length guard prevents corrupting large write_file content where `\"` is legitimate escaping.
+- **Observable effect:** Tool calls with escaped quotes will now parse and execute instead of failing silently.
+
+### Fix 4: Multi-JSON parsing in parseToolCallJson
+**File:** `pipeline/responseParser.js` function `parseToolCallJson`
+- **Symptom:** Model outputs two tool calls on separate lines in one ```json block:
+  `{"tool":"find_files",...}\n{"tool":"list_directory",...}`. JSON.parse only parses the
+  first object. The second tool call is silently dropped. Happened in Test 3 iters 4 and 5.
+- **Root cause:** JSON.parse handles one JSON value. Newline-separated objects are not valid JSON.
+- **Change:** After all single-parse attempts fail, split by newlines, filter for lines starting
+  with `{`, try JSON.parse on each independently. Combine all successful parses into one array.
+- **Observable effect:** Both tool calls should now be detected and executed.
+
+### Fix 3: Diagnostic logging in agenticLoop natural completion path
+**File:** `pipeline/agenticLoop.js` (two new console.log lines)
+- Added `[AgenticLoop] Post-tool-branch:` log after the tool execution branch close,
+  showing toolCalls count, stopReason, rotationCheckpoint state, fullResponseText length.
+- Added `[AgenticLoop] Natural completion` log before `stream.endFileContent()` and return.
+- **Test 3 confirmed:** Both diagnostic lines appeared in log. Pipeline reaches natural
+  completion and returns — the "UI stuck" from Test 2 was caused by toolCalls=0 leading to
+  text return with raw JSON, not by the pipeline hanging.
+
+### Test 3 Results (WebSocket direct, 2026-03-31)
+- Prompt: "Read the file src/app.js and list the files in the src directory. Also check if a file called README.md exists."
+- 9 iterations, natural completion, SUCCESS response
+- Tools used: read_file (4x, all blocked — empty filePath), find_files (2x, executed), grep_search (2x, executed)
+- **Fix-3 empty filePath check WORKING** — blocked 4 `read_file` calls with empty filePath
+- **D1-T3: Model puts prose in `read_file` content parameter** — model behavior issue, not pipeline
+- **D2-T3: Multi-JSON dropped second tool call** — Fix 4 addresses this
+- **D3-T3: find_files tool PowerShell error** — "FileStream was asked to open a device" — tool implementation bug
+
+---
+
+## 2026-03-31 — Fix wrong recommended model name (Qwen3.5-32B -> 27B)
+
+### Qwen 3.5 32B does not exist — replaced with 27B
+**File:** `frontend/src/components/WelcomeScreen.jsx` lines 38-44
+- `unsloth/Qwen3.5-32B-GGUF` returns 404 on HuggingFace — this repo does not exist
+- `unsloth/Qwen3.5-35B-GGUF` also 404 — Qwen3.5-35B is MoE only (`Qwen3.5-35B-A3B-GGUF`)
+- The largest dense Qwen 3.5 model is **27B** (`unsloth/Qwen3.5-27B-GGUF`)
+- Changed: name "Qwen 3.5 32B" -> "Qwen 3.5 27B", size "~20 GB" -> "~16.7 GB", VRAM "24GB+" -> "20GB+"
+- Changed: hfRepo `unsloth/Qwen3.5-32B-GGUF` -> `unsloth/Qwen3.5-27B-GGUF`
+- Changed: hfFile `Qwen3.5-32B-Q4_K_M.gguf` -> `Qwen3.5-27B-Q4_K_M.gguf`
+- Verified via HuggingFace browser: Qwen3.5-4B (exists), Qwen3.5-9B (exists), Qwen3.5-27B (exists, Q4_K_M = 16.7 GB)
+- server/main.js `/api/models/recommend` updated from Qwen 3 to Qwen 3.5 series
+  - Old: 7 Qwen 3 models (0.6B, 1.7B, 4B, 8B, 14B, 30B-A3B, 32B)
+  - New: 5 Qwen 3.5 models (0.8B Q8_0=0.8GB, 4B Q8_0=4.5GB, 9B Q4_K_M=5.7GB, 27B Q4_K_M=16.7GB, 35B-A3B Q4_K_M=22GB)
+  - All repos and file sizes verified via HuggingFace browser
+
+---
+
+## 2026-03-31 — UI Polish Round 3 (logo PNG, default theme, model overflow)
+
+### Logo mask switched from .ico to .png
+**File:** `frontend/src/components/TitleBar.jsx` line 135
+**File:** `frontend/src/components/EditorArea.jsx` line 390
+**File:** `frontend/src/components/WelcomeScreen.jsx` line 210
+- Changed `mask: url(/icon.ico)` to `mask: url(/icon.png)` in TitleBar and EditorArea
+- Replaced `<img src="/icon.ico">` with CSS mask div in WelcomeScreen.jsx (this was the actual visible welcome screen)
+- Copied actual ZZZ compass logo from `C:\Users\brend\IDE\build\icon.png` to `frontend/public/icon.png`
+- The .ico format did not render as a CSS mask; PNG works reliably
+
+### Default theme reverted to Monolith
+**File:** `frontend/src/components/ThemeProvider.jsx` line 591
+- Changed fallback from `'github-dark'` back to `'monolith'`
+
+### Recommended models — overflow fix
+**File:** `frontend/src/components/ChatPanel.jsx`
+- Added `max-h-[300px] overflow-y-auto` to recommended models container
+- Added `flex-wrap` to model name+tags row to prevent horizontal overflow
+- Added `truncate` to model name span
+
+---
+
+## 2026-03-31 — UI Polish Round 2 (logo tint, wavy lines, model name, sessions)
+
+### Logo icon now theme-reactive
+**File:** `frontend/src/components/TitleBar.jsx`
+- Replaced `<img src="/icon.ico">` with a `<div>` using CSS `mask: url(/icon.ico)` + `bg-vsc-accent`
+- Icon silhouette fills with the theme accent color automatically (orange for Monolith, blue for GitHub Dark, etc.)
+- Same approach applied to welcome screen in `EditorArea.jsx` (48x48 masked logo above "guIDE" heading)
+
+### Wavy background lines refined
+**File:** `frontend/src/components/EditorArea.jsx`
+- Reduced from 3 lines to 2 — less visual busy-ness
+- Lower waviness (gentler S-curves), wider spacing between lines (y=310 and y=370)
+- Slower animation (25s/35s cycles instead of 20s/25s/30s)
+- Thinner strokes (0.8/0.6 instead of 1.0/0.8/0.6)
+
+### Model name moved to Chat panel header
+**File:** `frontend/src/components/TitleBar.jsx` — removed model name badge from right section
+**File:** `frontend/src/components/ChatPanel.jsx` — added model name between "Chat" and spinner
+- Shows model name without `.gguf` extension, truncated at 140px
+- Cleaned up unused `Cpu` import and `modelInfo` from TitleBar
+
+### Version text fixed
+**File:** `frontend/src/components/EditorArea.jsx`
+- Changed "guIDE 2.0 — Built for local AI inference" to "guIDE — Built for local AI inference"
+
+### Chat session history on blank chat
+**File:** `frontend/src/components/ChatPanel.jsx`
+- Sessions auto-saved to localStorage every 3s when chat has 2+ messages (debounced)
+- Up to 10 recent sessions stored (FIFO)
+- When chat is empty, "Recent Chats" list appears with session title, date, delete button
+- Clicking a session restores its messages to the chat
+- Sessions keyed by first message ID to avoid duplicates
+
+---
+
+## 2026-03-31 — UI Polish & Feature Improvements (10-item batch)
+
+### 1. Default theme changed to GitHub Dark
+**File:** `frontend/src/components/ThemeProvider.jsx` line 591
+- Changed fallback from `'monolith'` to `'github-dark'`
+
+### 2. Removed "guIDE" text from title bar
+**File:** `frontend/src/components/TitleBar.jsx` line 135
+- Removed `<span className="font-brand ...">guIDE</span>`, keeping only the icon
+
+### 3. Animated wavy background on empty viewport
+**File:** `frontend/src/components/EditorArea.jsx` — WelcomeScreen function
+- Added two animated SVG wave paths with `animateTransform` (20s/25s cycles, opposite directions)
+- Radial accent glow div behind waves
+- All colors use `text-vsc-accent` / `currentColor` for theme reactivity
+- Content elements given `relative z-10` to layer above waves
+
+### 4. X button on file context badge in chat
+**File:** `frontend/src/components/ChatPanel.jsx`
+- Added `fileContextDismissed` state, resets on tab change via useEffect
+- Badge conditionally rendered on `!fileContextDismissed`
+- X button appears on hover (`group-hover:opacity-100`)
+- `doSend` excludes `currentFile` when dismissed
+
+### 5. Thinking budget increased for Qwen3.5 small models
+**File:** `modelProfiles.js`
+- qwen/tiny `_thinkBudgetWhenActive`: 128 -> 2048
+
+### 6. "Add Model Files" opens native file dialog (Electron IPC)
+**Files:** `electron-main.js`, `preload.js`, `frontend/src/components/ChatPanel.jsx`
+- Added `dialog-models-add` IPC handler in electron-main.js: opens file dialog with .gguf filter, multi-select, POSTs to `/api/models/add`
+- Added `modelsAdd`, `modelsScan`, `openExternal`, `showOpenDialog` to preload.js
+- Updated ChatPanel button handler: triggers rescan on success, proper fallback when electronAPI unavailable
+
+### 7. UI depth improvements (subtle shadows)
+**File:** `frontend/src/index.css`
+- `.chat-message.user`: Added `box-shadow: 0 1px 2px rgba(0,0,0,0.08)`
+- `.chat-message.assistant`: Added `box-shadow: 0 1px 1px rgba(0,0,0,0.04)`
+- `.file-tree-item.active`: Added accent glow `0 0 6px rgb(var(--guide-accent) / 0.08)` to existing inset shadow
+- `.sidebar-section-header`: Added `border-bottom: 1px solid rgb(var(--guide-panel-border) / 0.12)`
+
+### Items confirmed already working (no changes needed)
+- Checkpoint system: Already exists in ChatPanel.jsx (lines 708-740), dividers between turns with restore button
+- RAG system: Fully implemented in ragEngine.js with BM25 search, wired into mcpToolServer
+
+### Items not addressable via code
+- OAuth DNS NX domain: `api.graysoft.dev` needs a DNS A/CNAME record (infrastructure, not code)
+
+---
+
+## 2026-03-31 — Fix: Conversation history wiped on every message + continuation improvements
+
+### Root Cause 1 — chatHistory reset on every message (CRITICAL)
+
+**Symptom:** Model forgot previous messages. Every message started fresh with `entries=2` (system + user). User asked "can u write me a book about a boy in the woods", model started, then user said "ok" and model responded "Ready to help with your programming tasks" — completely forgot the book request.
+
+**Root cause:** `ChatPanel.jsx` line 445 always sends `conversationHistory: []` in the `invoke('ai-chat')` call. This was designed for the cloud path (stateless server). But `agenticLoop.js` line 197 interpreted `context?.conversationHistory?.length === 0` as a "new conversation" signal and RESET `llmEngine.chatHistory` to `[system]` on EVERY message. The local pipeline manages history server-side — this reset destroyed it every turn.
+
+**Fix in `pipeline/agenticLoop.js` (lines 194-206):**
+- Removed the `else if (context?.conversationHistory?.length === 0)` branch entirely
+- After `/api/session/clear` (New Chat), `resetSession()` already clears chatHistory to `[system]`. The first branch (`!chatHistory || chatHistory.length === 0`) catches empty state after reset.
+- The remaining `else` branch updates the system prompt in the existing chatHistory for continuing conversations.
+- Result: chatHistory accumulates across messages. `entries` will grow (2, 4, 6...) instead of always being 2.
+
+### Root Cause 2 — Mid-fence continuation creates new files
+
+**Symptom:** Model wrote inline HTML (240 lines), maxTokens hit mid-code-block. Continuation iteration produced a SEPARATE write_file tool call for `upload-zone.js` instead of continuing the HTML. Then a third iteration produced ANOTHER HTML file (246 lines). User sees 3 code blocks: two near-duplicate HTMLs and an unrelated JS file.
+
+**Root cause:** The continuation message for mid-fence had weak anchoring: "You are INSIDE a code block — output ONLY code, no text or summaries" + only 400 chars of tail. The 2B model didn't understand it should continue the same HTML — it started a new tool call for a different file.
+
+**Fix in `pipeline/continuationHandler.js` (mid-fence branch):**
+- Content-type detection from tail: detects HTML/markup, JavaScript, Python based on patterns in the last 800 chars
+- Tail context increased from 400 to 800 chars for better anchoring
+- Explicit instruction: "Do NOT use tool calls. Do NOT start a new file or code block. Do NOT add commentary or descriptions."
+
+### Root Cause 3 — Inline code blocks had no checkpoint tracking
+
+**Symptom:** When model writes inline code that gets cut off by maxTokens, there was no tracking of what was being generated. After a content-streamed tool call in a subsequent iteration, the D5/unclosed-fence check was skipped entirely (R16-Fix-C), so the model could stop with eogToken mid-file with no forced continuation.
+
+**Fix in `pipeline/agenticLoop.js` (continuation trigger section):**
+- When maxTokens hits mid-fence with no active tool call or rotationCheckpoint, log an inline code checkpoint with the detected language
+- This provides diagnostic visibility for debugging continuation failures
+- Future iterations can use this state to prevent premature stops
+
+---
+
 ## 2026-03-31 — v2.2.4: Backend never started in installed builds + Audiowide font + crash visibility
 
 ### Root Causes (3 compounding bugs — app never worked when installed)

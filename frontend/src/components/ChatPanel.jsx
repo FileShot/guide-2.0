@@ -365,6 +365,38 @@ export default function ChatPanel() {
   const atBottomRef = useRef(true);
   const [filesChangedExpanded, setFilesChangedExpanded] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [fileContextDismissed, setFileContextDismissed] = useState(false);
+  const [savedSessions, setSavedSessions] = useState([]);
+  const sessionSaveTimerRef = useRef(null);
+
+  // Load saved sessions from localStorage on mount
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('guide-chat-sessions');
+      if (raw) setSavedSessions(JSON.parse(raw));
+    } catch (_) {}
+  }, []);
+
+  // Auto-save current session to localStorage when messages change
+  useEffect(() => {
+    if (chatMessages.length < 2) return; // need at least user + assistant
+    if (sessionSaveTimerRef.current) clearTimeout(sessionSaveTimerRef.current);
+    sessionSaveTimerRef.current = setTimeout(() => {
+      try {
+        const userMsg = chatMessages.find(m => m.role === 'user');
+        const title = userMsg?.content?.slice(0, 60) || 'Chat session';
+        const sessionId = chatMessages[0]?.id || `s-${Date.now()}`;
+        const raw = localStorage.getItem('guide-chat-sessions');
+        const existing = raw ? JSON.parse(raw) : [];
+        // Replace existing session with same first message id, or prepend
+        const filtered = existing.filter(s => s.id !== sessionId);
+        const updated = [{ id: sessionId, title, messages: chatMessages, timestamp: Date.now() }, ...filtered].slice(0, 10);
+        localStorage.setItem('guide-chat-sessions', JSON.stringify(updated));
+        setSavedSessions(updated);
+      } catch (_) {}
+    }, 3000);
+    return () => { if (sessionSaveTimerRef.current) clearTimeout(sessionSaveTimerRef.current); };
+  }, [chatMessages]);
 
   const handleFileAttach = useCallback((files) => {
     for (const file of files) {
@@ -420,6 +452,9 @@ export default function ChatPanel() {
     }
   }, [input]);
 
+  // Reset file context dismissal when active tab changes
+  useEffect(() => { setFileContextDismissed(false); }, [activeTabId]);
+
   // R39-A2: Auto-scroll during streaming — Footer content changes don't trigger Virtuoso followOutput
   useEffect(() => {
     if (chatStreaming && atBottomRef.current && virtuosoRef.current) {
@@ -442,7 +477,7 @@ export default function ChatPanel() {
       const s = store.settings;
       const result = await (await import('../api/websocket')).invoke('ai-chat', text, {
         projectPath: store.projectPath,
-        currentFile: activeTab ? { path: activeTab.path, content: activeTab.content } : null,
+        currentFile: (!fileContextDismissed && activeTab) ? { path: activeTab.path, content: activeTab.content } : null,
         selectedCode: null,
         conversationHistory: [],
         cloudProvider: store.cloudProvider,
@@ -673,9 +708,14 @@ export default function ChatPanel() {
     <div className="flex flex-col h-full">
       {/* Header */}
       <div className="h-[35px] flex items-center justify-between px-3 border-b border-vsc-panel-border/50 no-select flex-shrink-0">
-        <div className="flex items-center gap-2 text-vsc-sm font-medium text-vsc-text">
-          <span className="text-vsc-text">Chat</span>
-          {chatStreaming && <Loader size={12} className="animate-spin text-vsc-accent" />}
+        <div className="flex items-center gap-2 text-vsc-sm font-medium text-vsc-text min-w-0">
+          <span className="text-vsc-text flex-shrink-0">Chat</span>
+          {modelInfo && (
+            <span className="text-[10px] text-vsc-text-dim/70 truncate max-w-[140px]" title={modelInfo.name}>
+              {(modelInfo.name || '').split('.gguf')[0]}
+            </span>
+          )}
+          {chatStreaming && <Loader size={12} className="animate-spin text-vsc-accent flex-shrink-0" />}
         </div>
         <div className="flex items-center gap-1">
           <button className="p-1 hover:bg-vsc-list-hover rounded" title="New Chat" onClick={handleClear}>
@@ -692,6 +732,39 @@ export default function ChatPanel() {
 
       {/* Messages area (virtualized) */}
       <div className="flex-1 min-h-0">
+        {/* Session history shown when chat is empty */}
+        {chatMessages.length === 0 && savedSessions.length > 0 && (
+          <div className="px-3 py-3">
+            <div className="text-[10px] font-medium text-vsc-text-dim uppercase tracking-wider mb-2">Recent Chats</div>
+            <div className="flex flex-col gap-0.5">
+              {savedSessions.map(session => (
+                <div
+                  key={session.id}
+                  className="flex items-center gap-2 px-2 py-1.5 rounded text-left hover:bg-vsc-list-hover/50 transition-colors group cursor-pointer"
+                  onClick={() => useAppStore.setState({ chatMessages: session.messages })}
+                >
+                  <Clock size={11} className="text-vsc-text-dim/50 flex-shrink-0" />
+                  <span className="text-[11px] text-vsc-text truncate flex-1">{session.title}</span>
+                  <span className="text-[9px] text-vsc-text-dim/40 flex-shrink-0">
+                    {new Date(session.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                  </span>
+                  <button
+                    className="p-0.5 text-vsc-text-dim/30 hover:text-vsc-error opacity-0 group-hover:opacity-100 transition-opacity"
+                    title="Delete session"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const updated = savedSessions.filter(s => s.id !== session.id);
+                      setSavedSessions(updated);
+                      localStorage.setItem('guide-chat-sessions', JSON.stringify(updated));
+                    }}
+                  >
+                    <X size={10} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         <Virtuoso
           ref={virtuosoRef}
           data={chatMessages}
@@ -826,12 +899,19 @@ export default function ChatPanel() {
           {/* Context indicator badges */}
           {(() => {
             const activeFile = openTabs.find(t => t.id === activeTabId);
-            return (activeFile || editorSelection) ? (
+            return ((activeFile && !fileContextDismissed) || editorSelection) ? (
               <div className="flex items-center gap-1.5 px-3 pt-2 pb-0.5">
-                {activeFile && (
-                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-vsc-accent/10 text-vsc-accent text-[10px] rounded-md">
+                {activeFile && !fileContextDismissed && (
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-vsc-accent/10 text-vsc-accent text-[10px] rounded-md group">
                     <FileCode size={10} />
                     {activeFile.name}
+                    <button
+                      className="ml-0.5 p-0.5 rounded-full hover:bg-vsc-accent/20 opacity-50 group-hover:opacity-100 transition-opacity"
+                      onClick={() => setFileContextDismissed(true)}
+                      title="Remove file from context"
+                    >
+                      <X size={8} />
+                    </button>
                   </span>
                 )}
                 {editorSelection && (
@@ -1750,7 +1830,7 @@ function ModelPickerDropdown({ onClose, models, currentModel }) {
             </button>
 
             {showRecommended && (
-              <div>
+              <div className="max-h-[300px] overflow-y-auto">
                 {!recommendedModels ? (
                   <div className="px-3 py-2 text-[10px] text-vsc-text-dim flex items-center gap-1">
                     <Loader size={10} className="animate-spin" /> Detecting hardware...
@@ -1769,8 +1849,8 @@ function ModelPickerDropdown({ onClose, models, currentModel }) {
                       return (
                         <div key={m.file} className="px-2 py-1.5 text-[11px] flex items-center gap-2 border-b border-vsc-panel-border/20 hover:bg-vsc-list-hover/30 transition-colors">
                           <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-1.5">
-                              <span className="text-vsc-text font-medium">{m.name}</span>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="text-vsc-text font-medium truncate">{m.name}</span>
                               <span className="text-[9px] text-vsc-text-dim">{m.size}GB</span>
                               {m.tags?.map(t => (
                                 <span key={t} className={`text-[8px] px-1 py-0.5 rounded ${
@@ -1990,9 +2070,14 @@ function ModelPickerDropdown({ onClose, models, currentModel }) {
             onClick={async () => {
               try {
                 const result = await window.electronAPI?.modelsAdd();
-                if (result?.success) onClose();
+                if (result?.success) {
+                  // Trigger a rescan so the new models appear in the list
+                  try { await window.electronAPI?.modelsScan(); } catch { await fetch('/api/models/scan', { method: 'POST' }); }
+                  onClose();
+                } else if (!window.electronAPI?.modelsAdd) {
+                  addNotification({ type: 'info', message: 'Add .gguf files to your models folder, then click Rescan.' });
+                }
               } catch {
-                // Not in Electron — show notification
                 addNotification({ type: 'info', message: 'Add .gguf files to your models folder, then click Rescan.' });
               }
             }}

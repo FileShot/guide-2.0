@@ -30,8 +30,6 @@ class StreamHandler {
     this._contentHoldback = '';          // T58-Fix-C: last N chars held back to strip JSON closing syntax
     this._fileContentActive = false;     // R19: true when file-content events are being sent to frontend
     this._fileContentFilePath = null;    // R19: filePath of the currently active file content block
-    this._suspenseBuffer = '';           // R35-L2: tokens buffered when _fileContentActive but no tool hold
-    this._suspenseMode = false;          // R35-L2: true when suspense buffering is active
     this._keepFileContentAlive = false;  // R42-Fix-2: when true, finalize(false) won't kill _fileContentActive
   }
 
@@ -142,22 +140,6 @@ class StreamHandler {
     }
 
     // No tool call pattern — safe to send
-    // R35-L2: If _fileContentActive but no tool hold, the model is generating
-    // tokens in iter 2 after stream.reset() cleared _holdingToolCall.
-    // Buffer these tokens instead of flushing as llm-token (which causes naked code).
-    // The suspense buffer is resolved by agenticLoop after generation completes.
-    if (this._fileContentActive && !this._holdingToolCall && !this._holdingFenced) {
-      const unsent2 = this._buffer.slice(this._sent);
-      if (unsent2) {
-        if (!this._suspenseMode) {
-          console.log(`[StreamHandler] R35-L2: Suspense mode ACTIVATED — _fileContentActive="${this._fileContentFilePath}" but no tool hold`);
-          this._suspenseMode = true;
-        }
-        this._suspenseBuffer += unsent2;
-        this._sent = this._buffer.length;
-      }
-      return;
-    }
     this._flush();
   }
 
@@ -423,7 +405,7 @@ class StreamHandler {
     // R37-Fix: Also guard on _suspenseMode — when suspense is active, there's pending content
     // that hasn't been resolved yet. finalize() must NOT kill _fileContentActive before
     // resolveSuspense() runs, or the suspended content routes as llm-token (naked text leak).
-    if (!isToolCall && this._fileContentActive && !this._contentResuming && !this._suspenseMode && !this._keepFileContentAlive) {
+    if (!isToolCall && this._fileContentActive && !this._contentResuming && !this._keepFileContentAlive) {
       this._send('file-content-end', { filePath: this._fileContentFilePath });
       this._fileContentActive = false;
       this._fileContentFilePath = null;
@@ -540,8 +522,6 @@ class StreamHandler {
     this._contentHoldback = '';
     // R19: _fileContentActive and _fileContentFilePath survive reset —
     // they track whether a file content block is open across iterations
-    // R35-L2: suspense buffer and mode survive reset — cleared by resolveSuspense()
-    // or explicitly by agenticLoop when the suspense is handled
   }
 
   /**
@@ -605,47 +585,6 @@ class StreamHandler {
       this._fileContentFilePath = null;
       this._cumulativeContentLen = 0;
     }
-  }
-
-  /**
-   * R35-L2: Check if there is suspended content from the suspense buffer.
-   */
-  hasSuspendedContent() {
-    return this._suspenseBuffer.length > 0;
-  }
-
-  /**
-   * R35-L2: Get the raw suspended content without resolving it.
-   */
-  getSuspendedContent() {
-    return this._suspenseBuffer;
-  }
-
-  /**
-   * R35-L2: Resolve the suspense buffer by routing content to the appropriate channel.
-   * @param {boolean} isFileContent — if true, send as file-content-token (extends existing block).
-   *                                   if false, send as llm-token (goes to text segment).
-   */
-  resolveSuspense(isFileContent) {
-    if (!this._suspenseBuffer) {
-      this._suspenseMode = false;
-      return;
-    }
-    if (isFileContent && this._fileContentActive) {
-      console.log(`[StreamHandler] R35-L2: Suspense resolved as FILE CONTENT (${this._suspenseBuffer.length} chars) — extending "${this._fileContentFilePath}"`);
-      this._send('file-content-token', this._suspenseBuffer);
-      this._cumulativeContentLen = (this._cumulativeContentLen || 0) + this._suspenseBuffer.length;
-      // R37-Fix: _fileContentActive stays alive — more iterations may follow
-    } else {
-      console.log(`[StreamHandler] R35-L2: Suspense resolved as TEXT (${this._suspenseBuffer.length} chars)`);
-      this._send('llm-token', this._suspenseBuffer);
-      // R42-Fix-1: Do NOT kill _fileContentActive here. The agenticLoop decides
-      // whether the file is structurally complete. Killing it prematurely causes
-      // subsequent tokens to flush as llm-token (naked code in chat).
-      // The agenticLoop calls endFileContent() when the file is truly done.
-    }
-    this._suspenseBuffer = '';
-    this._suspenseMode = false;
   }
 
   getFullText()    { return this._buffer; }

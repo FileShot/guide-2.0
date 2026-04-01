@@ -81,7 +81,7 @@ const FAMILY_PROFILES = {
     tiny: {
       sampling: { temperature: 0.45, topP: 0.85, topK: 20, repeatPenalty: 1.10, lastTokensPenaltyCount: 512 },
       prompt: { style: 'compact', fewShotExamples: 1 },
-      thinkTokens: { mode: 'none', budget: 0, _thinkBudgetWhenActive: 128 },
+      thinkTokens: { mode: 'none', budget: 0, _thinkBudgetWhenActive: 2048 },
       generation: { maxToolsPerTurn: 10 },
       quirks: { truncatesMidTool: true, poorMultiTool: true },
     },
