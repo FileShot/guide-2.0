@@ -646,7 +646,7 @@ export default function ChatPanel() {
     } finally {
       useAppStore.getState().setChatStreaming(false);
     }
-  }, [chatStreaming, addChatMessage, autoMode, planMode]);
+  }, [chatStreaming, addChatMessage, planMode]);
 
   // handleSend: reads from input state
   const handleSend = useCallback(() => {

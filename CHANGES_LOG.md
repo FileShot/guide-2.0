@@ -54,6 +54,15 @@
 - package.json: 2.2.6 → 2.2.7
 - Download page CURRENT_VERSION: 2.2.6 → 2.2.7
 
+### Deployment (2026-04-01)
+- guIDE repo: committed as `2b19533`, tagged v2.2.7, pushed to origin
+- GitHub Actions Build #11: all 5 jobs passed (windows-cpu 4m40s, windows-cuda 6m9s, linux-cpu 1m20s, linux-cuda 1m56s, mac-cpu done)
+- Release job triggered to create GitHub Release with installers
+- Website repo: committed as `d86a580`, pushed `c040a85..d86a580 main -> main`
+- Server deployment: updated source files on server via /system/run + GitHub raw download, rebuilt graysoft (job 39 completed)
+- Server source updated: CURRENT_VERSION 2.2.4 → 2.2.7, extensions pages deployed, Header/Footer nav links updated
+- Note: Cloudflare tunnels went down after rebuild (error 530/1033). Tunnels need server-side restart.
+
 ---
 
 ## 2026-04-01 — Debug System (Node.js + Python)
