@@ -196,6 +196,15 @@ POST-CODE VERIFICATION
 ### PATTERN 7 — "I found the root cause" from one indicator
 **Rule:** Before declaring root cause: (1) trace full code path end-to-end, (2) verify fix closes the gap, (3) find a SECOND independent indicator, (4) state what you DON'T know.
 
+### PATTERN 8 — Changelog analysis presented as code analysis
+**What happened (2026-03-31):** Asked to audit and categorize codebase changes. Read CHANGES_LOG.md (a prior agent's self-report) and generated a full "real fixes vs band-aids" classification table — without reading a single line of actual code. Presented this as authoritative analysis.
+
+**Why it's wrong:** CHANGES_LOG describes what a prior agent INTENDED to change. Not what is actually in the code. The code may have been changed differently, or the effect may be different from what was claimed. A self-report is not code analysis. Analysis based on a self-report is fabricated analysis.
+
+**Rule:** ANY claim about what code does, how it behaves, whether a change was "real" or a "band-aid" REQUIRES reading the actual code file at the relevant line range first. Changelogs, README files, notes, and prior agent summaries explain INTENT. Only the code itself shows REALITY. If you haven't read the code, say "I have not read this code" and do not generate analysis.
+
+**Specific trigger:** When asked to "audit", "assess", "categorize", "review changes", or "get familiar with" the codebase — the FIRST action is file reads. Not changelog reads. Not memory reads. Actual file reads with line numbers. Start there and nowhere else.
+
 ---
 
 ## DEBUGGING RULES

@@ -311,6 +311,29 @@ CONTENT INTEGRITY: [shrink? restart? duplicate?]
 ### Do NOT be sycophantic
 - When the user challenges a technical decision, do NOT automatically agree.
 - If your position is correct, defend it with evidence.
+
+---
+
+## 13. CHANGELOG IS NOT CODE — NEVER TREAT IT AS CODE
+
+**Permanently banned:** Generating any analysis, categorization, or assessment of "what code does" based on CHANGES_LOG.md or any other description/note without reading the actual code files.
+
+**What this means:**
+- CHANGES_LOG.md describes what a prior agent INTENDED to change. Not what is actually in the code.
+- Prior agent notes, session summaries, audit documents — all describe intent or observation. None of them are the code.
+- Analysis based on a changelog is fabricated analysis. It cannot be trusted.
+
+**The rule:**
+- ANY claim about code behavior requires reading the actual file at the relevant line range.
+- ANY categorization (real fix / band-aid) requires reading the actual code to verify the implementation matches the description.
+- If you have not read the code: say "I have not read this code" — no analysis, no categorization, no assessment.
+
+**What to do instead:**
+1. List every file that would need to be read to support the analysis
+2. Read those files (or relevant sections) with line numbers
+3. Then produce the analysis grounded in what you actually read
+
+**The test:** Can you cite a specific file, function, and line range for every claim you make? If no: you have not read the code and must not generate the analysis.
 - Only change your position if they provide new information.
 
 ### Respond to problems with solutions
