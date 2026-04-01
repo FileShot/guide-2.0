@@ -4,6 +4,24 @@
 
 ---
 
+## 2026-04-01 — v2.2.10: Fix cloud model silence + graysoft provider
+
+### Fix A: Cloud model errors not displayed to user
+**File:** frontend/src/components/ChatPanel.jsx (line ~632)
+- **Symptom:** User sends message to cloud model, sees loading dots briefly then nothing. No error message. No response.
+- **Root cause:** When backend returns `{success: false, error: "..."}`, the finalization code checks for `result.text` (which error responses don't have). `messageContent` ends up empty. `hasContent` is false. No `addChatMessage` is called. User sees silence.
+- **Fix:** After the content/toolCalls check, added `else if (result.success === false && result.error)` branch that adds an error assistant message: `Error: ${result.error}`.
+- **Observable effect:** When cloud model fails (e.g., provider not configured, API error), user now sees the error message in chat instead of nothing.
+
+### Fix B: GraySoft cloud provider not available
+**File:** cloudLLMService.js (lines 546-560, 790-805)
+- **Symptom:** User selects GraySoft Cloud provider, sends message. Backend returns `{success: false, error: "Provider graysoft not configured"}` because graysoft is not in the configured providers list (has no API key, not in BUNDLED_PROVIDERS).
+- **Root cause:** `getConfiguredProviders()` only returns providers with API keys set. GraySoft uses session tokens (license system) instead of API keys. It was never added to the configured list when a session token exists.
+- **Fix 1:** `getConfiguredProviders()` now adds graysoft to the list when `_licenseManager.getSessionToken()` returns a value.
+- **Fix 2:** `generate()` now allows graysoft without an API key (like ollama). When provider is 'graysoft', sets `apiKeys['graysoft']` to the session token for auth.
+- **Fix 3:** `generate()` proxy routing now includes graysoft (`provider === 'graysoft'`) alongside bundled providers.
+- **Observable effect:** GraySoft Cloud works when user has a GraySoft account. Shows clear error if not logged in.
+
 ## 2026-04-01 — v2.2.9: WebSocket fix + comprehensive pipeline logging
 
 ### Fix A: WebSocket /ws/terminal returning HTTP 400

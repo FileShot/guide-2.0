@@ -640,6 +640,12 @@ export default function ChatPanel() {
           // R46-A: Store model name for display on finalized messages
           model: useAppStore.getState().modelInfo?.name || undefined,
         });
+      } else if (result && result.success === false && result.error) {
+        // v2.2.10: Display backend error messages (e.g. "Provider not configured")
+        useAppStore.getState().addChatMessage({
+          role: 'assistant',
+          content: `Error: ${result.error}`,
+        });
       }
     } catch (err) {
       useAppStore.getState().addChatMessage({ role: 'assistant', content: `Error: ${err.message}` });

@@ -550,6 +550,11 @@ class CloudLLMService extends EventEmitter {
         providers.push({ provider, label: PROVIDER_LABELS[provider] || provider });
       }
     }
+    // v2.2.10: GraySoft cloud is available when the user has a session token
+    const sessionToken = this._licenseManager?.getSessionToken();
+    if (sessionToken && !providers.find(p => p.provider === 'graysoft')) {
+      providers.push({ provider: 'graysoft', label: PROVIDER_LABELS['graysoft'] || 'GraySoft Cloud' });
+    }
     if (this._ollamaAvailable) {
       providers.push({ provider: 'ollama', label: 'Ollama (Local)' });
     }
@@ -786,7 +791,7 @@ class CloudLLMService extends EventEmitter {
     const images = options.images || [];
     const noFallback = options.noFallback || false;
 
-    if (!provider || (!this.apiKeys[provider] && provider !== 'ollama')) {
+    if (!provider || (!this.apiKeys[provider] && provider !== 'ollama' && provider !== 'graysoft')) {
       throw new Error(`No API key configured for ${provider}`);
     }
 
@@ -794,8 +799,16 @@ class CloudLLMService extends EventEmitter {
       return this._generateOllama(model, systemPrompt, prompt, options, onToken, conversationHistory, onThinkingToken, images);
     }
 
+    // v2.2.10: GraySoft uses session token as auth — set it as the API key for this request
     const sessionToken = this._licenseManager?.getSessionToken();
-    if (sessionToken && this._isBundledProvider(provider) && !(images && images.length > 0) && !options.skipProxy) {
+    if (provider === 'graysoft') {
+      if (!sessionToken) {
+        throw new Error('GraySoft Cloud requires a GraySoft account. Create one in Settings > Account.');
+      }
+      this.apiKeys['graysoft'] = sessionToken;
+    }
+
+    if (sessionToken && (this._isBundledProvider(provider) || provider === 'graysoft') && !(images && images.length > 0) && !options.skipProxy) {
       try {
         return await this._generateViaProxy(provider, model, systemPrompt, prompt, options, onToken, conversationHistory, onThinkingToken, sessionToken);
       } catch (err) {
