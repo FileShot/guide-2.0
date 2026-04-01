@@ -95,6 +95,7 @@ const { AutoUpdater } = require(path.join(ROOT_DIR, 'autoUpdater'));
 const { RAGEngine } = require(path.join(ROOT_DIR, 'ragEngine'));
 const { AccountManager } = require(path.join(ROOT_DIR, 'accountManager'));
 const { LicenseManager } = require(path.join(ROOT_DIR, 'licenseManager'));
+const { ExtensionManager } = require(path.join(ROOT_DIR, 'extensionManager'));
 const { ModelDownloader } = require(path.join(__dirname, 'modelDownloader'));
 const liveServer = require(path.join(__dirname, 'liveServer'));
 const agenticChat = require(path.join(ROOT_DIR, 'agenticChat'));
@@ -147,6 +148,10 @@ const accountManager = new AccountManager(settingsManager);
 
 // License manager — validates licenses, handles Stripe checkout
 const licenseManager = new LicenseManager(settingsManager, accountManager);
+
+// Extension manager — community extension install, enable, disable
+const extensionManager = new ExtensionManager(USER_DATA);
+extensionManager.initialize().catch(err => console.error('[Server] Extension init error:', err.message));
 
 let currentSettings = settingsManager.getAll();
 
@@ -603,6 +608,98 @@ app.post('/api/license/deactivate', (req, res) => {
   licenseManager.deactivate();
   accountManager.logout();
   res.json({ success: true });
+});
+
+// ─── Extension Management ────────────────────────────────
+
+app.get('/api/extensions', async (req, res) => {
+  try {
+    const extensions = extensionManager.getInstalled();
+    const categories = extensionManager.getCategories();
+    res.json({ extensions, categories });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/extensions/install', async (req, res) => {
+  try {
+    // Multipart upload — parse the zip file from the request body
+    const contentType = req.headers['content-type'] || '';
+    if (!contentType.includes('multipart/form-data')) {
+      return res.status(400).json({ error: 'Expected multipart/form-data with a .zip or .guide-ext file' });
+    }
+
+    const boundary = contentType.split('boundary=')[1];
+    if (!boundary) return res.status(400).json({ error: 'No boundary in multipart request' });
+
+    const chunks = [];
+    for await (const chunk of req) { chunks.push(chunk); }
+    const body = Buffer.concat(chunks);
+    const bodyStr = body.toString('binary');
+    const parts = bodyStr.split('--' + boundary).filter(p => p.trim() && p.trim() !== '--');
+
+    let fileBuffer = null;
+    let fileName = 'extension.zip';
+
+    for (const part of parts) {
+      const headerEnd = part.indexOf('\r\n\r\n');
+      if (headerEnd === -1) continue;
+      const headers = part.substring(0, headerEnd);
+      if (!headers.includes('filename=')) continue;
+
+      const fnMatch = headers.match(/filename="([^"]+)"/);
+      if (fnMatch) fileName = path.basename(fnMatch[1]);
+
+      const fileData = part.substring(headerEnd + 4);
+      // Remove trailing \r\n
+      const trimmed = fileData.endsWith('\r\n') ? fileData.slice(0, -2) : fileData;
+      fileBuffer = Buffer.from(trimmed, 'binary');
+      break;
+    }
+
+    if (!fileBuffer) {
+      return res.status(400).json({ error: 'No file found in upload' });
+    }
+
+    const result = await extensionManager.installFromZip(fileBuffer, fileName);
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/extensions/uninstall', async (req, res) => {
+  try {
+    const { id } = req.body;
+    if (!id) return res.status(400).json({ error: 'Extension ID required' });
+    const result = await extensionManager.uninstall(id);
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/extensions/enable', async (req, res) => {
+  try {
+    const { id } = req.body;
+    if (!id) return res.status(400).json({ error: 'Extension ID required' });
+    const result = await extensionManager.enable(id);
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/extensions/disable', async (req, res) => {
+  try {
+    const { id } = req.body;
+    if (!id) return res.status(400).json({ error: 'Extension ID required' });
+    const result = await extensionManager.disable(id);
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Session management

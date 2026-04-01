@@ -4,6 +4,47 @@
 
 ---
 
+## 2026-04-01 — Extension System Core
+
+### New: extensionManager.js
+**File:** extensionManager.js (new, root level)
+- Full extension lifecycle manager: install, uninstall, enable, disable, scan
+- Extension format: folder with `manifest.json` (id, name, version, description, author, category, icon, main, homepage, repository)
+- Extensions stored in `<userData>/extensions/` (e.g. `%APPDATA%/guide-ide/extensions/` on Windows)
+- State persisted in `<userData>/extensions.json` (enabled/disabled per extension ID)
+- Install from zip: extracts, validates manifest, copies to extensions dir. Supports both root-level manifest and one-level-deep folder layout.
+- Uses system unzip (PowerShell Expand-Archive on Windows, unzip on Unix) as fallback when adm-zip module is unavailable.
+- Emits 'extensions-updated' event when extension list changes.
+
+### New: Extension API Endpoints
+**File:** server/main.js
+- Added `require` for `ExtensionManager` and instantiation with `USER_DATA` path
+- `GET /api/extensions` — returns all installed extensions + categories
+- `POST /api/extensions/install` — multipart upload of .zip/.guide-ext file, extracts and installs
+- `POST /api/extensions/uninstall` — removes extension by ID (blocks uninstall of builtins)
+- `POST /api/extensions/enable` — enables extension by ID
+- `POST /api/extensions/disable` — disables extension by ID
+
+### New: ExtensionsPanel UI
+**File:** frontend/src/components/Sidebar.jsx
+- Replaced stub with full ExtensionsPanel component (ported from old IDE's PluginPanel.tsx, adapted to JSX + HTTP fetch)
+- Two tabs: "Installed" (functional) and "Marketplace" (placeholder linking to graysoft.dev/extensions)
+- Search bar filters by name/description across all extensions
+- Category filter pills (all, theme, snippets, formatter, linter, language, tools, ai, git, other)
+- Extension cards show: icon (colored by category), name, category badge, description, rating stars, version, author
+- Enable/disable toggle per extension (ToggleRight/ToggleLeft icons)
+- Uninstall button (blocked for built-in extensions)
+- "Install from File" button opens native file picker for .zip/.guide-ext files
+- Marketplace tab: "Coming soon" placeholder with links to graysoft.dev/extensions and graysoft.dev/extensions/submit
+- Added `Package, Star, Download, Upload` to lucide-react imports
+
+### New: Extension Store State
+**File:** frontend/src/stores/appStore.js
+- Added `extensions: []`, `extensionCategories: ['all']`, `extensionsLoading: false`
+- Added `setExtensions(list)`, `setExtensionCategories(cats)`, `setExtensionsLoading(bool)` actions
+
+---
+
 ## 2026-04-01 — v2.2.6 UX Fixes (Model Files, Zoom, Queue, Auto Mode)
 
 ### Fix A: Add Model Files — Browser Fallback

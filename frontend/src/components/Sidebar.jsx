@@ -15,7 +15,8 @@ import {
   Keyboard, Wrench, ToggleLeft, ToggleRight, Server, Power,
   Check, Minus, Undo2, History, GitMerge,
   Save, RotateCcw, Zap, Scale, Brain, Cpu, Monitor, Type,
-  FolderOpen, ExternalLink, Play
+  FolderOpen, ExternalLink, Play,
+  Package, Star, Download, Upload
 } from 'lucide-react';
 
 export default function Sidebar() {
@@ -1831,16 +1832,268 @@ function DebugPanel() {
 }
 
 function ExtensionsPanel() {
+  const extensions = useAppStore(s => s.extensions);
+  const extensionCategories = useAppStore(s => s.extensionCategories);
+  const extensionsLoading = useAppStore(s => s.extensionsLoading);
+  const setExtensions = useAppStore(s => s.setExtensions);
+  const setExtensionCategories = useAppStore(s => s.setExtensionCategories);
+  const setExtensionsLoading = useAppStore(s => s.setExtensionsLoading);
+
+  const [tab, setTab] = useState('installed');
+  const [search, setSearch] = useState('');
+  const [category, setCategory] = useState('all');
+  const [actionLoading, setActionLoading] = useState(null);
+  const fileInputRef = useRef(null);
+
+  const loadExtensions = useCallback(async () => {
+    setExtensionsLoading(true);
+    try {
+      const res = await fetch('/api/extensions');
+      const data = await res.json();
+      if (data.extensions) setExtensions(data.extensions);
+      if (data.categories) setExtensionCategories(data.categories);
+    } catch (err) {
+      console.error('Failed to load extensions:', err);
+    }
+    setExtensionsLoading(false);
+  }, [setExtensions, setExtensionCategories, setExtensionsLoading]);
+
+  useEffect(() => {
+    loadExtensions();
+  }, [loadExtensions]);
+
+  const handleInstallFile = async (e) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    setActionLoading('installing');
+    try {
+      for (const file of files) {
+        const formData = new FormData();
+        formData.append('extension', file);
+        const res = await fetch('/api/extensions/install', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!data.success) {
+          console.error('Install failed:', data.error);
+        }
+      }
+      await loadExtensions();
+    } catch (err) {
+      console.error('Install error:', err);
+    }
+    setActionLoading(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleUninstall = async (id) => {
+    setActionLoading(id);
+    try {
+      await fetch('/api/extensions/uninstall', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      await loadExtensions();
+    } catch (err) {
+      console.error('Uninstall error:', err);
+    }
+    setActionLoading(null);
+  };
+
+  const handleToggle = async (id, enabled) => {
+    try {
+      await fetch(`/api/extensions/${enabled ? 'enable' : 'disable'}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      await loadExtensions();
+    } catch (err) {
+      console.error('Toggle error:', err);
+    }
+  };
+
+  const categoryColors = {
+    theme: '#9b59b6',
+    snippets: '#3498db',
+    formatter: '#2ecc71',
+    linter: '#e67e22',
+    language: '#1abc9c',
+    tools: '#e74c3c',
+    git: '#f39c12',
+    ai: '#8b5cf6',
+    other: '#6b7280',
+  };
+
+  const renderStars = (rating) => {
+    const full = Math.floor(rating || 0);
+    return (
+      <span className="flex items-center gap-0.5">
+        {Array.from({ length: 5 }, (_, i) => (
+          <Star key={i} size={10} fill={i < full ? '#fbbf24' : 'none'} stroke={i < full ? '#fbbf24' : '#666'} />
+        ))}
+        {rating > 0 && <span className="text-[10px] ml-0.5 text-vsc-text-dim">{rating}</span>}
+      </span>
+    );
+  };
+
+  const filtered = extensions.filter(ext => {
+    if (category !== 'all' && ext.category !== category) return false;
+    if (search && !ext.name.toLowerCase().includes(search.toLowerCase()) &&
+        !ext.description.toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  });
+
   return (
-    <div className="flex flex-col h-full">
-      <div className="sidebar-header">
-        <span className="font-semibold text-vsc-xs uppercase tracking-wider">Extensions</span>
+    <div className="flex flex-col h-full text-[12px]">
+      {/* Tabs */}
+      <div className="flex border-b border-vsc-border">
+        <button onClick={() => setTab('installed')}
+          className={`flex-1 px-2 py-1.5 text-[11px] transition-colors border-b-2 ${
+            tab === 'installed' ? 'text-vsc-accent border-vsc-accent' : 'text-vsc-text-dim border-transparent'
+          }`}>
+          Installed ({extensions.length})
+        </button>
+        <button onClick={() => setTab('marketplace')}
+          className={`flex-1 px-2 py-1.5 text-[11px] transition-colors border-b-2 ${
+            tab === 'marketplace' ? 'text-vsc-accent border-vsc-accent' : 'text-vsc-text-dim border-transparent'
+          }`}>
+          Marketplace
+        </button>
       </div>
-      <div className="flex-1 flex flex-col items-center justify-center p-4 text-center">
-        <p className="text-vsc-sm text-vsc-text-dim mb-2">No extensions installed.</p>
-        <p className="text-vsc-xs text-vsc-text-dim">
-          Extension support will be available in a future update.
-        </p>
+
+      {/* Search + Filter */}
+      <div className="px-3 pt-2 space-y-1.5">
+        <div className="flex items-center gap-1 px-2 py-1.5 rounded bg-vsc-input border border-vsc-border">
+          <SearchIcon size={13} className="text-vsc-text-dim" />
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search extensions..."
+            className="flex-1 bg-transparent outline-none text-[12px] text-vsc-text"
+          />
+        </div>
+        <div className="flex gap-1 flex-wrap">
+          {extensionCategories.map(cat => (
+            <button key={cat} onClick={() => setCategory(cat)}
+              className={`px-2 py-0.5 rounded-full text-[10px] capitalize transition-colors ${
+                category === cat ? 'bg-vsc-accent text-white' : 'bg-vsc-sidebar-bg text-vsc-text-dim'
+              }`}>
+              {cat}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Install Button */}
+      {tab === 'installed' && (
+        <div className="px-3 pt-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".zip,.guide-ext"
+            className="hidden"
+            onChange={handleInstallFile}
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={actionLoading === 'installing'}
+            className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded text-[11px] font-medium bg-vsc-accent text-white hover:opacity-90 disabled:opacity-50"
+          >
+            <Upload size={13} />
+            {actionLoading === 'installing' ? 'Installing...' : 'Install from File'}
+          </button>
+        </div>
+      )}
+
+      {/* Extension List */}
+      <div className="flex-1 overflow-auto px-3 py-2 space-y-2">
+        {tab === 'installed' && (
+          extensionsLoading ? (
+            <div className="text-center py-8 text-vsc-text-dim">Loading...</div>
+          ) : filtered.length === 0 ? (
+            <div className="text-center py-8">
+              <Package size={32} className="mx-auto mb-2 opacity-30 text-vsc-text-dim" />
+              <p className="text-vsc-text-dim text-[12px]">No extensions installed</p>
+              <p className="text-[10px] text-vsc-text-dim mt-1">
+                Install extensions from .zip or .guide-ext files,<br />
+                or browse the marketplace for community extensions.
+              </p>
+            </div>
+          ) : (
+            filtered.map(ext => (
+              <div key={ext.id} className="p-2.5 rounded bg-vsc-sidebar-bg border border-vsc-border">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <Package size={14} style={{ color: categoryColors[ext.category] || categoryColors.other }} />
+                      <span className="font-medium text-[12px] text-vsc-text">{ext.name}</span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full capitalize bg-vsc-selection text-vsc-text-dim">
+                        {ext.category}
+                      </span>
+                    </div>
+                    <p className="text-[11px] mt-0.5 leading-tight text-vsc-text-dim">{ext.description}</p>
+                    <div className="flex items-center gap-3 mt-1">
+                      {ext.rating && renderStars(ext.rating)}
+                      <span className="text-[10px] text-vsc-text-dim">v{ext.version}</span>
+                      {ext.author && <span className="text-[10px] text-vsc-text-dim">{ext.author}</span>}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1 ml-2 flex-shrink-0">
+                    <button onClick={() => handleToggle(ext.id, !ext.enabled)}
+                      className="p-1 rounded hover:opacity-80"
+                      title={ext.enabled ? 'Disable' : 'Enable'}>
+                      {ext.enabled
+                        ? <ToggleRight size={18} className="text-green-400" />
+                        : <ToggleLeft size={18} className="text-vsc-text-dim" />}
+                    </button>
+                    {!ext.builtin && (
+                      <button onClick={() => handleUninstall(ext.id)}
+                        disabled={actionLoading === ext.id}
+                        className="p-1 rounded hover:opacity-80 text-vsc-text-dim disabled:opacity-50"
+                        title="Uninstall">
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))
+          )
+        )}
+
+        {tab === 'marketplace' && (
+          <div className="text-center py-8">
+            <Package size={32} className="mx-auto mb-2 opacity-30 text-vsc-text-dim" />
+            <p className="text-vsc-text-dim text-[12px] font-medium">Community Marketplace</p>
+            <p className="text-[10px] text-vsc-text-dim mt-1 mb-3">
+              Browse and install community-built extensions.<br />
+              Coming soon at graysoft.dev/extensions
+            </p>
+            <a
+              href="https://graysoft.dev/extensions"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 px-3 py-1.5 rounded text-[11px] font-medium bg-vsc-accent text-white hover:opacity-90"
+            >
+              <ExternalLink size={12} />
+              Visit Marketplace
+            </a>
+            <div className="mt-4 pt-4 border-t border-vsc-border">
+              <p className="text-[10px] text-vsc-text-dim">
+                Want to create an extension?
+              </p>
+              <a
+                href="https://graysoft.dev/extensions/submit"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[10px] text-vsc-accent hover:underline"
+              >
+                Submit your extension
+              </a>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -453,6 +453,14 @@ const useAppStore = create((set, get) => ({
   activeActivity: 'explorer', // 'explorer' | 'search' | 'git' | 'chat' | 'extensions' | 'settings'
   activePanelTab: 'terminal', // 'terminal' | 'output' | 'problems'
 
+  // ─── Extensions ────────────────────────────────────────
+  extensions: [],
+  extensionCategories: ['all'],
+  extensionsLoading: false,
+  setExtensions: (list) => set({ extensions: list }),
+  setExtensionCategories: (cats) => set({ extensionCategories: cats }),
+  setExtensionsLoading: (val) => set({ extensionsLoading: val }),
+
   toggleSidebar: () => set(s => ({ sidebarVisible: !s.sidebarVisible })),
   setSidebarWidth: (w) => set({ sidebarWidth: Math.max(180, Math.min(600, w)) }),
   togglePanel: () => set(s => ({ panelVisible: !s.panelVisible })),
