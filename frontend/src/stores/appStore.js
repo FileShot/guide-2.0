@@ -461,6 +461,61 @@ const useAppStore = create((set, get) => ({
   setExtensionCategories: (cats) => set({ extensionCategories: cats }),
   setExtensionsLoading: (val) => set({ extensionsLoading: val }),
 
+  // ─── Debug ─────────────────────────────────────────────
+  debugSessionId: null,
+  debugSessionState: 'inactive', // 'inactive' | 'running' | 'paused' | 'stopped'
+  debugStackFrames: [],
+  debugScopes: [],
+  debugVariables: {},     // { [ref]: [...variables] }
+  debugOutput: [],        // string[]
+  debugError: null,
+
+  setDebugSession: (id, state) => set({ debugSessionId: id, debugSessionState: state || 'running' }),
+  clearDebugSession: () => set({
+    debugSessionId: null, debugSessionState: 'inactive',
+    debugStackFrames: [], debugScopes: [], debugVariables: {}, debugError: null,
+  }),
+  setDebugStackFrames: (frames) => set({ debugStackFrames: frames }),
+  setDebugScopes: (scopes) => set({ debugScopes: scopes }),
+  setDebugVariables: (ref, vars) => set(s => ({
+    debugVariables: { ...s.debugVariables, [ref]: vars },
+  })),
+  addDebugOutput: (text) => set(s => {
+    const next = [...s.debugOutput, text];
+    return { debugOutput: next.length > 500 ? next.slice(-500) : next };
+  }),
+  clearDebugOutput: () => set({ debugOutput: [] }),
+  setDebugError: (err) => set({ debugError: err }),
+
+  handleDebugEvent: (data) => {
+    const s = get();
+    switch (data.event) {
+      case 'initialized':
+        s.addDebugOutput('--- Debug session initialized ---\n');
+        break;
+      case 'stopped':
+        set({ debugSessionState: 'paused' });
+        // Auto-fetch stack trace
+        if (s.debugSessionId) {
+          fetch(`/api/debug/stackTrace?sessionId=${s.debugSessionId}`)
+            .then(r => r.json())
+            .then(d => { if (d.success) set({ debugStackFrames: d.stackFrames || [] }); })
+            .catch(() => {});
+        }
+        break;
+      case 'continued':
+        set({ debugSessionState: 'running', debugStackFrames: [], debugScopes: [], debugVariables: {} });
+        break;
+      case 'terminated':
+        s.addDebugOutput(`\n--- Debug session ended (exit code: ${data.exitCode ?? 0}) ---\n`);
+        set({ debugSessionId: null, debugSessionState: 'stopped' });
+        break;
+      case 'output':
+        if (data.output) s.addDebugOutput(data.output);
+        break;
+    }
+  },
+
   toggleSidebar: () => set(s => ({ sidebarVisible: !s.sidebarVisible })),
   setSidebarWidth: (w) => set({ sidebarWidth: Math.max(180, Math.min(600, w)) }),
   togglePanel: () => set(s => ({ panelVisible: !s.panelVisible })),

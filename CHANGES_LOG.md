@@ -4,6 +4,59 @@
 
 ---
 
+## 2026-04-01 — Debug System (Node.js + Python)
+
+### New: debugService.js
+**File:** debugService.js (new, root level)
+- Full debug service: start/stop sessions, step controls, breakpoints, expression evaluation
+- Node.js debugging via Chrome DevTools Protocol (CDP): spawns child process with `--inspect-brk=0`, connects via WebSocket to CDP endpoint, sends Debugger.* and Runtime.* commands
+- Python debugging via Debug Adapter Protocol (DAP): spawns `python -m debugpy --listen 127.0.0.1:PORT --wait-for-client`, connects via TCP socket, sends DAP JSON messages with Content-Length framing
+- Unified interface: start(), stop(), resume(), stepOver(), stepInto(), stepOut(), pause(), getStackTrace(), getScopes(), getVariables(), evaluate(), setBreakpoints()
+- Events emitted: initialized, stopped, continued, terminated, output
+- Auto-cleanup: kills child processes on stop, handles process exit/error events
+
+### New: Debug API Endpoints
+**File:** server/main.js
+- Added `require` for `DebugService` and instantiation
+- Debug event forwarding: `debugService.on('debug-event', data => mainWindow.webContents.send('debug-event', data))`
+- `POST /api/debug/start` — starts debug session (body: type, program, args, cwd)
+- `POST /api/debug/stop` — stops active session
+- `POST /api/debug/continue` — resumes execution
+- `POST /api/debug/stepOver` — step over
+- `POST /api/debug/stepInto` — step into
+- `POST /api/debug/stepOut` — step out
+- `POST /api/debug/pause` — pause execution
+- `POST /api/debug/evaluate` — evaluate expression in frame context
+- `POST /api/debug/setBreakpoints` — set breakpoints in a source file
+- `GET /api/debug/stackTrace` — get current call stack
+- `GET /api/debug/scopes` — get scopes for current frame
+- `GET /api/debug/variables` — get variables for a scope
+- `GET /api/debug/sessions` — list active debug sessions
+
+### New: Debug Event Handler
+**File:** frontend/src/App.jsx
+- Added `case 'debug-event'` in handleEvent switch to dispatch debug events to store
+
+### New: Debug Store State
+**File:** frontend/src/stores/appStore.js
+- State: `debugSessionId`, `debugSessionState` ('inactive'|'running'|'paused'), `debugStackFrames`, `debugScopes`, `debugVariables`, `debugOutput`, `debugError`
+- Actions: `setDebugSession`, `clearDebugSession`, `setDebugStackFrames`, `setDebugScopes`, `setDebugVariables`, `addDebugOutput`, `clearDebugOutput`, `setDebugError`
+- `handleDebugEvent(data)`: dispatches 'initialized', 'stopped' (auto-fetches stack trace), 'continued', 'terminated', 'output' events
+
+### New: DebugPanel UI
+**File:** frontend/src/components/Sidebar.jsx
+- Replaced stub with full DebugPanel component (~280 lines, adapted from old IDE's DebugPanel.tsx)
+- Launch configuration: type selector (Node.js / Python), program path input, arguments input, Start Debugging button
+- Debugger toolbar: Continue (F5), Step Over (F10), Step Into (F11), Step Out (Shift+F11), Pause (F6), Stop (Shift+F5)
+- Call Stack section: collapsible, shows frame name + source file:line, highlights top frame in yellow
+- Variables section: collapsible, shows scopes with expand/collapse, color-coded values (blue names, orange strings, green numbers)
+- Debug Console: scrollable output log with auto-scroll, expression evaluator input (when paused)
+- Error bar: shows debug errors inline with AlertTriangle icon
+- Session state badge: shows running (green) or paused (yellow) status
+- Added `Pause, SkipForward, ArrowDownRight, ArrowUpRight, Square, Bug, AlertTriangle, Eye` to lucide-react imports
+
+---
+
 ## 2026-04-01 — Extension System Core
 
 ### New: extensionManager.js

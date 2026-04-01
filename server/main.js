@@ -96,6 +96,7 @@ const { RAGEngine } = require(path.join(ROOT_DIR, 'ragEngine'));
 const { AccountManager } = require(path.join(ROOT_DIR, 'accountManager'));
 const { LicenseManager } = require(path.join(ROOT_DIR, 'licenseManager'));
 const { ExtensionManager } = require(path.join(ROOT_DIR, 'extensionManager'));
+const { DebugService } = require(path.join(ROOT_DIR, 'debugService'));
 const { ModelDownloader } = require(path.join(__dirname, 'modelDownloader'));
 const liveServer = require(path.join(__dirname, 'liveServer'));
 const agenticChat = require(path.join(ROOT_DIR, 'agenticChat'));
@@ -152,6 +153,9 @@ const licenseManager = new LicenseManager(settingsManager, accountManager);
 // Extension manager — community extension install, enable, disable
 const extensionManager = new ExtensionManager(USER_DATA);
 extensionManager.initialize().catch(err => console.error('[Server] Extension init error:', err.message));
+
+// Debug service — manages debug sessions (Node.js/Python)
+const debugService = new DebugService();
 
 let currentSettings = settingsManager.getAll();
 
@@ -700,6 +704,146 @@ app.post('/api/extensions/disable', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// ─── Debug Service ───────────────────────────────────────
+
+// Forward debug events to the frontend via the WebSocket bridge
+debugService.on('debug-event', (data) => {
+  mainWindow.webContents.send('debug-event', data);
+});
+
+app.post('/api/debug/start', async (req, res) => {
+  try {
+    const { type, program, cwd, args } = req.body;
+    if (!program) return res.status(400).json({ error: 'Program path required' });
+    const result = await debugService.start({
+      type: type || 'node',
+      program,
+      cwd: cwd || ctx.currentProjectPath || undefined,
+      args: args || [],
+    });
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.post('/api/debug/stop', async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+    if (!sessionId) return res.status(400).json({ error: 'Session ID required' });
+    const result = await debugService.stop(sessionId);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.post('/api/debug/continue', async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+    const result = await debugService.resume(sessionId);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.post('/api/debug/stepOver', async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+    const result = await debugService.stepOver(sessionId);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.post('/api/debug/stepInto', async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+    const result = await debugService.stepInto(sessionId);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.post('/api/debug/stepOut', async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+    const result = await debugService.stepOut(sessionId);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.post('/api/debug/pause', async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+    const result = await debugService.pause(sessionId);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.get('/api/debug/stackTrace', async (req, res) => {
+  try {
+    const sessionId = parseInt(req.query.sessionId);
+    const result = await debugService.getStackTrace(sessionId);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.get('/api/debug/scopes', async (req, res) => {
+  try {
+    const sessionId = parseInt(req.query.sessionId);
+    const frameId = parseInt(req.query.frameId || '0');
+    const result = await debugService.getScopes(sessionId, frameId);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.get('/api/debug/variables', async (req, res) => {
+  try {
+    const sessionId = parseInt(req.query.sessionId);
+    const ref = req.query.ref;
+    const result = await debugService.getVariables(sessionId, ref);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.post('/api/debug/evaluate', async (req, res) => {
+  try {
+    const { sessionId, expression, frameId } = req.body;
+    const result = await debugService.evaluate(sessionId, expression, frameId);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.post('/api/debug/setBreakpoints', async (req, res) => {
+  try {
+    const { sessionId, filePath, breakpoints } = req.body;
+    const result = await debugService.setBreakpoints(sessionId, filePath, breakpoints || []);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.get('/api/debug/sessions', (req, res) => {
+  res.json({ sessions: debugService.getActiveSessions() });
 });
 
 // Session management

@@ -16,7 +16,8 @@ import {
   Check, Minus, Undo2, History, GitMerge,
   Save, RotateCcw, Zap, Scale, Brain, Cpu, Monitor, Type,
   FolderOpen, ExternalLink, Play,
-  Package, Star, Download, Upload
+  Package, Star, Download, Upload,
+  Pause, SkipForward, ArrowDownRight, ArrowUpRight, Square, Bug, AlertTriangle, Eye
 } from 'lucide-react';
 
 export default function Sidebar() {
@@ -1816,16 +1817,365 @@ function MCPConfigPanel() {
 }
 
 function DebugPanel() {
+  const debugSessionId = useAppStore(s => s.debugSessionId);
+  const debugSessionState = useAppStore(s => s.debugSessionState);
+  const debugStackFrames = useAppStore(s => s.debugStackFrames);
+  const debugScopes = useAppStore(s => s.debugScopes);
+  const debugVariables = useAppStore(s => s.debugVariables);
+  const debugOutput = useAppStore(s => s.debugOutput);
+  const debugError = useAppStore(s => s.debugError);
+  const setDebugError = useAppStore(s => s.setDebugError);
+  const addDebugOutput = useAppStore(s => s.addDebugOutput);
+  const clearDebugOutput = useAppStore(s => s.clearDebugOutput);
+
+  const [debugType, setDebugType] = useState('node');
+  const [program, setProgram] = useState('');
+  const [args, setArgs] = useState('');
+  const [evalExpr, setEvalExpr] = useState('');
+  const [expandedScopes, setExpandedScopes] = useState({});
+  const [expandedFrames, setExpandedFrames] = useState({});
+  const [showCallStack, setShowCallStack] = useState(true);
+  const [showVariables, setShowVariables] = useState(true);
+  const [showConsole, setShowConsole] = useState(true);
+  const [actionLoading, setActionLoading] = useState(false);
+  const consoleEndRef = useRef(null);
+
+  const isActive = debugSessionState !== 'inactive';
+  const isPaused = debugSessionState === 'paused';
+
+  useEffect(() => {
+    if (consoleEndRef.current) {
+      consoleEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [debugOutput]);
+
+  const debugAction = useCallback(async (endpoint, method = 'POST', body = null) => {
+    try {
+      setActionLoading(true);
+      setDebugError(null);
+      const opts = { method };
+      if (body) {
+        opts.headers = { 'Content-Type': 'application/json' };
+        opts.body = JSON.stringify(body);
+      }
+      const res = await fetch(`/api/debug/${endpoint}`, opts);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Debug action failed');
+      return data;
+    } catch (err) {
+      setDebugError(err.message);
+      return null;
+    } finally {
+      setActionLoading(false);
+    }
+  }, [setDebugError]);
+
+  const handleStart = useCallback(async () => {
+    if (!program.trim()) {
+      setDebugError('Enter a file path to debug');
+      return;
+    }
+    clearDebugOutput();
+    const argsList = args.trim() ? args.trim().split(/\s+/) : [];
+    await debugAction('start', 'POST', { type: debugType, program: program.trim(), args: argsList });
+  }, [program, args, debugType, debugAction, clearDebugOutput, setDebugError]);
+
+  const handleStop = useCallback(() => debugAction('stop', 'POST', { sessionId: debugSessionId }), [debugAction, debugSessionId]);
+  const handleContinue = useCallback(() => debugAction('continue', 'POST', { sessionId: debugSessionId }), [debugAction, debugSessionId]);
+  const handleStepOver = useCallback(() => debugAction('stepOver', 'POST', { sessionId: debugSessionId }), [debugAction, debugSessionId]);
+  const handleStepInto = useCallback(() => debugAction('stepInto', 'POST', { sessionId: debugSessionId }), [debugAction, debugSessionId]);
+  const handleStepOut = useCallback(() => debugAction('stepOut', 'POST', { sessionId: debugSessionId }), [debugAction, debugSessionId]);
+  const handlePause = useCallback(() => debugAction('pause', 'POST', { sessionId: debugSessionId }), [debugAction, debugSessionId]);
+
+  const handleEvaluate = useCallback(async () => {
+    if (!evalExpr.trim() || !debugSessionId) return;
+    const result = await debugAction('evaluate', 'POST', {
+      sessionId: debugSessionId,
+      expression: evalExpr.trim(),
+      frameId: debugStackFrames[0]?.id
+    });
+    if (result && result.result) {
+      addDebugOutput(`> ${evalExpr}`);
+      addDebugOutput(result.result.description || result.result.value || JSON.stringify(result.result));
+    }
+    setEvalExpr('');
+  }, [evalExpr, debugSessionId, debugStackFrames, debugAction, addDebugOutput]);
+
+  const toggleScope = useCallback(async (scopeRef) => {
+    const key = String(scopeRef);
+    if (expandedScopes[key]) {
+      setExpandedScopes(prev => { const n = { ...prev }; delete n[key]; return n; });
+    } else {
+      setExpandedScopes(prev => ({ ...prev, [key]: true }));
+      if (!debugVariables[key]) {
+        await debugAction('variables', 'GET');
+      }
+    }
+  }, [expandedScopes, debugVariables, debugAction]);
+
+  const loadFrameScopes = useCallback(async (frameIndex) => {
+    const key = String(frameIndex);
+    if (expandedFrames[key]) {
+      setExpandedFrames(prev => { const n = { ...prev }; delete n[key]; return n; });
+    } else {
+      setExpandedFrames(prev => ({ ...prev, [key]: true }));
+    }
+  }, [expandedFrames]);
+
+  // No active session — show launch config
+  if (!isActive) {
+    return (
+      <div className="flex flex-col h-full">
+        <div className="sidebar-header">
+          <span className="font-semibold text-vsc-xs uppercase tracking-wider">Run and Debug</span>
+        </div>
+        <div className="flex-1 overflow-y-auto scrollbar-vsc p-3 space-y-3">
+          {debugError && (
+            <div className="flex items-center gap-1.5 p-2 bg-red-500/10 border border-red-500/30 rounded text-red-400 text-vsc-xs">
+              <AlertTriangle size={12} className="shrink-0" />
+              <span className="truncate">{debugError}</span>
+            </div>
+          )}
+
+          <div>
+            <label className="text-vsc-xs text-vsc-text-dim block mb-1">Type</label>
+            <div className="flex gap-1">
+              <button
+                className={`flex-1 px-2 py-1 rounded text-vsc-xs ${debugType === 'node' ? 'bg-vsc-accent text-white' : 'bg-vsc-bg-light text-vsc-text-dim hover:text-vsc-text'}`}
+                onClick={() => setDebugType('node')}
+              >Node.js</button>
+              <button
+                className={`flex-1 px-2 py-1 rounded text-vsc-xs ${debugType === 'python' ? 'bg-vsc-accent text-white' : 'bg-vsc-bg-light text-vsc-text-dim hover:text-vsc-text'}`}
+                onClick={() => setDebugType('python')}
+              >Python</button>
+            </div>
+          </div>
+
+          <div>
+            <label className="text-vsc-xs text-vsc-text-dim block mb-1">Program</label>
+            <input
+              className="w-full bg-vsc-input border border-vsc-border rounded px-2 py-1 text-vsc-sm text-vsc-text placeholder-vsc-text-dim focus:outline-none focus:border-vsc-accent"
+              placeholder={debugType === 'node' ? 'e.g. index.js' : 'e.g. main.py'}
+              value={program}
+              onChange={e => setProgram(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleStart()}
+            />
+          </div>
+
+          <div>
+            <label className="text-vsc-xs text-vsc-text-dim block mb-1">Arguments</label>
+            <input
+              className="w-full bg-vsc-input border border-vsc-border rounded px-2 py-1 text-vsc-sm text-vsc-text placeholder-vsc-text-dim focus:outline-none focus:border-vsc-accent"
+              placeholder="Optional arguments"
+              value={args}
+              onChange={e => setArgs(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleStart()}
+            />
+          </div>
+
+          <button
+            className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 bg-vsc-accent hover:bg-vsc-accent/80 text-white rounded text-vsc-sm disabled:opacity-50"
+            onClick={handleStart}
+            disabled={actionLoading || !program.trim()}
+          >
+            <Play size={14} />
+            Start Debugging
+          </button>
+
+          <div className="border-t border-vsc-border pt-3 mt-2">
+            <p className="text-vsc-xs text-vsc-text-dim">
+              {debugType === 'node'
+                ? 'Launches Node.js with --inspect-brk. Connects via Chrome DevTools Protocol.'
+                : 'Launches Python with debugpy. Requires: pip install debugpy'}
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Active session — show debugger controls
   return (
     <div className="flex flex-col h-full">
-      <div className="sidebar-header">
-        <span className="font-semibold text-vsc-xs uppercase tracking-wider">Run and Debug</span>
+      <div className="sidebar-header justify-between">
+        <span className="font-semibold text-vsc-xs uppercase tracking-wider">
+          <Bug size={12} className="inline mr-1" />
+          Debugging
+        </span>
+        <span className={`text-vsc-xs px-1.5 py-0.5 rounded ${isPaused ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'}`}>
+          {debugSessionState}
+        </span>
       </div>
-      <div className="flex-1 flex flex-col items-center justify-center p-4 text-center">
-        <p className="text-vsc-sm text-vsc-text-dim mb-2">No debug configurations found.</p>
-        <p className="text-vsc-xs text-vsc-text-dim">
-          Debug functionality will be available in a future update.
-        </p>
+
+      {/* Toolbar */}
+      <div className="flex items-center gap-1 px-3 py-1.5 border-b border-vsc-border bg-vsc-bg-darker">
+        <button onClick={handleContinue} disabled={!isPaused || actionLoading} title="Continue (F5)"
+          className="p-1 rounded hover:bg-vsc-bg-light text-green-400 disabled:opacity-30 disabled:hover:bg-transparent">
+          <Play size={14} />
+        </button>
+        <button onClick={handleStepOver} disabled={!isPaused || actionLoading} title="Step Over (F10)"
+          className="p-1 rounded hover:bg-vsc-bg-light text-vsc-accent disabled:opacity-30 disabled:hover:bg-transparent">
+          <SkipForward size={14} />
+        </button>
+        <button onClick={handleStepInto} disabled={!isPaused || actionLoading} title="Step Into (F11)"
+          className="p-1 rounded hover:bg-vsc-bg-light text-vsc-accent disabled:opacity-30 disabled:hover:bg-transparent">
+          <ArrowDownRight size={14} />
+        </button>
+        <button onClick={handleStepOut} disabled={!isPaused || actionLoading} title="Step Out (Shift+F11)"
+          className="p-1 rounded hover:bg-vsc-bg-light text-vsc-accent disabled:opacity-30 disabled:hover:bg-transparent">
+          <ArrowUpRight size={14} />
+        </button>
+        <button onClick={handlePause} disabled={isPaused || actionLoading} title="Pause (F6)"
+          className="p-1 rounded hover:bg-vsc-bg-light text-yellow-400 disabled:opacity-30 disabled:hover:bg-transparent">
+          <Pause size={14} />
+        </button>
+        <div className="flex-1" />
+        <button onClick={handleStop} disabled={actionLoading} title="Stop (Shift+F5)"
+          className="p-1 rounded hover:bg-vsc-bg-light text-red-400 disabled:opacity-30 disabled:hover:bg-transparent">
+          <Square size={14} />
+        </button>
+      </div>
+
+      {debugError && (
+        <div className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/10 border-b border-red-500/30 text-red-400 text-vsc-xs">
+          <AlertTriangle size={12} className="shrink-0" />
+          <span className="truncate">{debugError}</span>
+        </div>
+      )}
+
+      <div className="flex-1 overflow-y-auto scrollbar-vsc">
+        {/* Call Stack */}
+        <div className="border-b border-vsc-border">
+          <button
+            className="w-full flex items-center gap-1 px-3 py-1.5 text-vsc-xs font-semibold uppercase tracking-wider text-vsc-text-dim hover:text-vsc-text"
+            onClick={() => setShowCallStack(v => !v)}
+          >
+            {showCallStack ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            Call Stack
+          </button>
+          {showCallStack && (
+            <div className="px-1 pb-2">
+              {debugStackFrames.length === 0 ? (
+                <p className="px-3 text-vsc-xs text-vsc-text-dim italic">
+                  {isPaused ? 'No frames available' : 'Running...'}
+                </p>
+              ) : (
+                debugStackFrames.map((frame, i) => (
+                  <button
+                    key={frame.id || i}
+                    className={`w-full text-left px-3 py-0.5 text-vsc-xs hover:bg-vsc-bg-light rounded truncate ${i === 0 ? 'text-yellow-300' : 'text-vsc-text-dim'}`}
+                    onClick={() => loadFrameScopes(i)}
+                    title={`${frame.name} — ${frame.source || 'unknown'}:${frame.line || '?'}`}
+                  >
+                    <span className="text-vsc-text">{frame.name || '<anonymous>'}</span>
+                    {frame.source && (
+                      <span className="ml-1 text-vsc-text-dim">
+                        {frame.source.split(/[/\\]/).pop()}:{frame.line}
+                      </span>
+                    )}
+                  </button>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Variables */}
+        <div className="border-b border-vsc-border">
+          <button
+            className="w-full flex items-center gap-1 px-3 py-1.5 text-vsc-xs font-semibold uppercase tracking-wider text-vsc-text-dim hover:text-vsc-text"
+            onClick={() => setShowVariables(v => !v)}
+          >
+            {showVariables ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            Variables
+          </button>
+          {showVariables && (
+            <div className="px-1 pb-2">
+              {debugScopes.length === 0 ? (
+                <p className="px-3 text-vsc-xs text-vsc-text-dim italic">
+                  {isPaused ? 'No scopes available' : 'Not paused'}
+                </p>
+              ) : (
+                debugScopes.map((scope, si) => (
+                  <div key={scope.name || si}>
+                    <button
+                      className="w-full flex items-center gap-1 px-3 py-0.5 text-vsc-xs text-vsc-text hover:bg-vsc-bg-light rounded"
+                      onClick={() => toggleScope(scope.object?.objectId || si)}
+                    >
+                      {expandedScopes[String(scope.object?.objectId || si)]
+                        ? <ChevronDown size={10} />
+                        : <ChevronRight size={10} />}
+                      <Eye size={10} className="text-vsc-accent" />
+                      <span>{scope.name || scope.type || 'Scope'}</span>
+                    </button>
+                    {expandedScopes[String(scope.object?.objectId || si)] && (
+                      <div className="ml-4">
+                        {(debugVariables[String(scope.object?.objectId || si)] || []).map((v, vi) => (
+                          <div key={v.name || vi} className="flex items-baseline gap-1.5 px-3 py-0.5 text-vsc-xs truncate">
+                            <span className="text-blue-300">{v.name}</span>
+                            <span className="text-vsc-text-dim">=</span>
+                            <span className={`truncate ${v.type === 'string' ? 'text-orange-300' : v.type === 'number' ? 'text-green-300' : 'text-vsc-text'}`}>
+                              {v.value !== undefined ? String(v.value) : v.description || 'undefined'}
+                            </span>
+                          </div>
+                        ))}
+                        {(!debugVariables[String(scope.object?.objectId || si)] ||
+                          debugVariables[String(scope.object?.objectId || si)].length === 0) && (
+                          <p className="px-3 text-vsc-xs text-vsc-text-dim italic">No variables</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Debug Console */}
+        <div>
+          <button
+            className="w-full flex items-center gap-1 px-3 py-1.5 text-vsc-xs font-semibold uppercase tracking-wider text-vsc-text-dim hover:text-vsc-text"
+            onClick={() => setShowConsole(v => !v)}
+          >
+            {showConsole ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            Debug Console
+          </button>
+          {showConsole && (
+            <div className="px-1 pb-2">
+              <div className="max-h-48 overflow-y-auto scrollbar-vsc bg-vsc-bg-darker rounded mx-2 mb-2">
+                {debugOutput.length === 0 ? (
+                  <p className="px-2 py-1 text-vsc-xs text-vsc-text-dim italic">No output</p>
+                ) : (
+                  debugOutput.map((line, i) => (
+                    <div key={i} className="px-2 py-0.5 text-vsc-xs font-mono text-vsc-text whitespace-pre-wrap break-all">
+                      {line}
+                    </div>
+                  ))
+                )}
+                <div ref={consoleEndRef} />
+              </div>
+              {isPaused && (
+                <div className="flex gap-1 mx-2">
+                  <input
+                    className="flex-1 bg-vsc-input border border-vsc-border rounded px-2 py-1 text-vsc-xs text-vsc-text placeholder-vsc-text-dim font-mono focus:outline-none focus:border-vsc-accent"
+                    placeholder="Evaluate expression..."
+                    value={evalExpr}
+                    onChange={e => setEvalExpr(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && handleEvaluate()}
+                  />
+                  <button
+                    className="px-2 py-1 bg-vsc-accent hover:bg-vsc-accent/80 text-white rounded text-vsc-xs disabled:opacity-50"
+                    onClick={handleEvaluate}
+                    disabled={!evalExpr.trim()}
+                  >
+                    Run
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

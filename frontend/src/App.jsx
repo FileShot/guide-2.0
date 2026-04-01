@@ -208,6 +208,11 @@ export default function App() {
         s.removeModelDownload(data.id);
         break;
 
+      // Debug events
+      case 'debug-event':
+        s.handleDebugEvent(data);
+        break;
+
       default:
         break;
     }
