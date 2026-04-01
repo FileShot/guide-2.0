@@ -400,6 +400,21 @@ export default function App() {
         e.preventDefault();
         s.zoomReset();
       }
+      // Shift+Alt+F — Format Document
+      if (e.shiftKey && e.altKey && e.key === 'F') {
+        e.preventDefault();
+        const tab = s.openTabs.find(t => t.id === s.activeTabId);
+        if (tab && tab.content) {
+          const ext = tab.path.split('.').pop().toLowerCase();
+          fetch('/api/format', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: tab.content, language: ext, filePath: tab.path })
+          }).then(r => r.json()).then(data => {
+            if (data.formatted) s.updateTabContent(tab.id, data.formatted);
+          }).catch(() => {});
+        }
+      }
       // Escape — Close command palette
       if (e.key === 'Escape') {
         if (s.commandPaletteOpen) s.closeCommandPalette();

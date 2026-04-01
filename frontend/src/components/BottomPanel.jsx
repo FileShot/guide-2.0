@@ -4,11 +4,12 @@
  */
 import { useState, useRef, useEffect, useCallback } from 'react';
 import useAppStore from '../stores/appStore';
-import { Terminal as TerminalIcon, FileOutput, AlertTriangle, X, Plus, Trash2, Globe, Bug, ChevronDown, MoreHorizontal } from 'lucide-react';
+import { Terminal as TerminalIcon, FileOutput, AlertTriangle, X, Plus, Trash2, Globe, Bug, ChevronDown, MoreHorizontal, CheckSquare, RefreshCw } from 'lucide-react';
 
 const panelTabs = [
   { id: 'problems', label: 'PROBLEMS', icon: AlertTriangle },
   { id: 'output', label: 'OUTPUT', icon: FileOutput },
+  { id: 'todo', label: 'TODO', icon: CheckSquare },
   { id: 'debug', label: 'DEBUG CONSOLE', icon: Bug },
   { id: 'terminal', label: 'TERMINAL', icon: TerminalIcon },
   { id: 'ports', label: 'PORTS', icon: Globe },
@@ -101,6 +102,7 @@ export default function BottomPanel() {
         {activePanelTab === 'terminal' && <XTermPanel />}
         {activePanelTab === 'output' && <OutputPanel />}
         {activePanelTab === 'problems' && <ProblemsPanel />}
+        {activePanelTab === 'todo' && <TodoPanel />}
         {activePanelTab === 'debug' && <PlaceholderPanel label="Debug Console" />}
         {activePanelTab === 'ports' && <PlaceholderPanel label="Ports" />}
       </div>
@@ -388,6 +390,100 @@ function ProblemsPanel() {
       <div className="flex items-center gap-2 text-vsc-text-dim text-vsc-xs">
         <AlertTriangle size={14} />
         <span>No problems detected in workspace</span>
+      </div>
+    </div>
+  );
+}
+
+function TodoPanel() {
+  const todoItems = useAppStore(s => s.todoItems);
+  const todoLoading = useAppStore(s => s.todoLoading);
+  const scanTodos = useAppStore(s => s.scanTodos);
+  const setActiveTab = useAppStore(s => s.setActiveTab);
+  const openTabs = useAppStore(s => s.openTabs);
+
+  const TYPE_COLORS = {
+    TODO: 'text-blue-400',
+    FIXME: 'text-red-400',
+    HACK: 'text-yellow-400',
+    NOTE: 'text-green-400',
+    XXX: 'text-orange-400',
+    BUG: 'text-red-500',
+    OPTIMIZE: 'text-purple-400'
+  };
+
+  // Group by file
+  const grouped = {};
+  todoItems.forEach(item => {
+    if (!grouped[item.file]) grouped[item.file] = [];
+    grouped[item.file].push(item);
+  });
+
+  const handleClick = async (item) => {
+    // Open file and navigate to line
+    try {
+      const r = await fetch(`/api/files/read?path=${encodeURIComponent(item.file)}`);
+      const data = await r.json();
+      if (data.content !== undefined) {
+        const tabId = `file-${item.file}`;
+        const existing = openTabs.find(t => t.path === item.file);
+        if (existing) {
+          setActiveTab(existing.id);
+        } else {
+          useAppStore.getState().openTab({
+            id: tabId,
+            name: item.file.split('/').pop(),
+            path: item.file,
+            content: data.content,
+            language: item.file.split('.').pop()
+          });
+        }
+      }
+    } catch (_) {}
+  };
+
+  return (
+    <div className="h-full flex flex-col">
+      <div className="flex items-center gap-2 px-2 py-1 border-b border-vsc-panel-border/30 flex-shrink-0">
+        <button
+          className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] text-vsc-text-dim hover:text-vsc-text hover:bg-vsc-list-hover transition-colors"
+          onClick={scanTodos}
+          disabled={todoLoading}
+        >
+          <RefreshCw size={12} className={todoLoading ? 'animate-spin' : ''} />
+          {todoLoading ? 'Scanning...' : 'Scan'}
+        </button>
+        <span className="text-vsc-xs text-vsc-text-dim">
+          {todoItems.length > 0 ? `${todoItems.length} items` : ''}
+        </span>
+      </div>
+      <div className="flex-1 overflow-y-auto scrollbar-thin p-1">
+        {todoItems.length === 0 && !todoLoading && (
+          <div className="flex items-center gap-2 p-2 text-vsc-text-dim text-vsc-xs">
+            <CheckSquare size={14} />
+            <span>Click Scan to find TODO, FIXME, HACK, NOTE, BUG comments in your project</span>
+          </div>
+        )}
+        {Object.entries(grouped).map(([file, items]) => (
+          <div key={file} className="mb-1">
+            <div className="px-2 py-0.5 text-vsc-xs text-vsc-text-dim font-medium truncate" title={file}>
+              {file}
+            </div>
+            {items.map((item, i) => (
+              <button
+                key={`${file}-${item.line}-${i}`}
+                className="w-full text-left flex items-baseline gap-2 px-4 py-0.5 text-vsc-xs hover:bg-vsc-list-hover rounded cursor-pointer"
+                onClick={() => handleClick(item)}
+              >
+                <span className={`font-bold flex-shrink-0 ${TYPE_COLORS[item.type] || 'text-vsc-text'}`}>
+                  {item.type}
+                </span>
+                <span className="text-vsc-text-dim flex-shrink-0">:{item.line}</span>
+                <span className="text-vsc-text truncate">{item.text}</span>
+              </button>
+            ))}
+          </div>
+        ))}
       </div>
     </div>
   );

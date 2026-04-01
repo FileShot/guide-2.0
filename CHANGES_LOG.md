@@ -4,6 +4,58 @@
 
 ---
 
+## 2026-04-01 — v2.2.7: Prettier Formatting, TODO Highlighting, Extension Marketplace
+
+### New: Prettier Code Formatting
+**File:** server/main.js, EditorArea.jsx, App.jsx
+- Added `prettier` dependency (v3.5.3) to package.json
+- `POST /api/format` endpoint: takes `{ content, language, filePath }`, runs `prettier.format()` with auto-detected parser (babel, typescript, css, html, json, yaml, markdown, graphql, vue, svelte, less, mdx)
+- Reads `.prettierrc` from project root if present, merges with format options
+- "Format" button added to editor toolbar breadcrumb area (Wand2 icon)
+- Shift+Alt+F keyboard shortcut in App.jsx calls `/api/format` and replaces editor content
+- Added `Wand2` to EditorArea.jsx lucide-react imports
+
+### New: TODO Highlighting
+**File:** server/main.js, BottomPanel.jsx, appStore.js
+- `POST /api/todos/scan` endpoint: scans all project files for TODO/FIXME/HACK/NOTE/XXX/BUG/OPTIMIZE comments
+- Regex: `/\b(TODO|FIXME|HACK|NOTE|XXX|BUG|OPTIMIZE)\b[:\s]*(.*)/gi`
+- Skips binary files, node_modules, .git, dist, build, __pycache__, .venv, etc.
+- Caps at 500 results, returns `{ file, line, type, text }`
+- "TODO" tab added to BottomPanel (CheckSquare icon), between PROBLEMS and DEBUG CONSOLE
+- Results grouped by file, color-coded by type (TODO=blue, FIXME=red, HACK=yellow, NOTE=green, XXX=orange, BUG=red, OPTIMIZE=purple)
+- Click any result to open the file in the editor
+- Scan button with loading spinner, item count display
+- Added `todoItems`, `todoLoading`, `setTodoItems`, `setTodoLoading`, `scanTodos` to appStore.js
+- Added `CheckSquare, RefreshCw` to BottomPanel.jsx lucide-react imports
+
+### New: Extension Marketplace Pages (graysoft.dev)
+**File:** C:\Users\brend\IDE\website\src\app\extensions\page.tsx (new)
+- Browse page: search bar, category filter pills (9 categories), extension cards with name/author/description/category/version
+- "Marketplace Launching Soon" banner explaining early state
+- "How to Install Extensions" section with 4-step guide
+- "Build Your Own Extension" CTA linking to submit page
+- 3 showcase/example extension cards demonstrating the format
+
+**File:** C:\Users\brend\IDE\website\src\app\extensions\submit\page.tsx (new)
+- Extension structure diagram (folder tree with manifest.json, main.js, styles, snippets, README)
+- Full manifest.json documentation with required fields (id, name, version) and optional fields (description, author, category, icon, main, homepage, repository)
+- Extension categories grid (9 categories with descriptions)
+- Packaging instructions (zip command for Unix and PowerShell)
+- 3 submission methods: GitHub PR, email, community forum
+- Submission guidelines (6 rules)
+
+**File:** C:\Users\brend\IDE\website\src\components\Header.tsx
+- Added `{ href: '/extensions', label: 'Extensions' }` to navLinks
+
+**File:** C:\Users\brend\IDE\website\src\components\Footer.tsx
+- Added `{ href: '/extensions', label: 'Extensions' }` to Product footer column
+
+### Version Bump
+- package.json: 2.2.6 → 2.2.7
+- Download page CURRENT_VERSION: 2.2.6 → 2.2.7
+
+---
+
 ## 2026-04-01 — Debug System (Node.js + Python)
 
 ### New: debugService.js

@@ -23,6 +23,7 @@ const fs = require('fs');
 const os = require('os');
 const express = require('express');
 const cors = require('cors');
+const prettier = require('prettier');
 
 const { IpcMainBridge, MainWindowBridge, createAppBridge } = require('./ipcBridge');
 const { Transport } = require('./transport');
@@ -844,6 +845,108 @@ app.post('/api/debug/setBreakpoints', async (req, res) => {
 
 app.get('/api/debug/sessions', (req, res) => {
   res.json({ sessions: debugService.getActiveSessions() });
+});
+
+// ─── Code formatting (Prettier) ─────────────────────────
+app.post('/api/format', async (req, res) => {
+  try {
+    const { content, language, filePath: fp } = req.body;
+    if (typeof content !== 'string') return res.status(400).json({ error: 'content required' });
+
+    // Map language/extension to prettier parser
+    const parserMap = {
+      javascript: 'babel', js: 'babel', jsx: 'babel', mjs: 'babel', cjs: 'babel',
+      typescript: 'typescript', ts: 'typescript', tsx: 'typescript',
+      css: 'css', scss: 'css', less: 'less',
+      html: 'html', htm: 'html', vue: 'vue', svelte: 'svelte',
+      json: 'json', jsonc: 'json',
+      yaml: 'yaml', yml: 'yaml',
+      markdown: 'markdown', md: 'markdown', mdx: 'mdx',
+      graphql: 'graphql', gql: 'graphql',
+      xml: 'html', svg: 'html'
+    };
+
+    const ext = fp ? path.extname(fp).replace('.', '').toLowerCase() : '';
+    const parser = parserMap[language] || parserMap[ext] || 'babel';
+
+    // Try to load .prettierrc from project
+    let prettierConfig = {};
+    if (ctx.projectPath) {
+      try {
+        const rcPath = path.join(ctx.projectPath, '.prettierrc');
+        if (fs.existsSync(rcPath)) {
+          prettierConfig = JSON.parse(fs.readFileSync(rcPath, 'utf-8'));
+        }
+      } catch (_) { /* ignore bad config */ }
+    }
+
+    const formatted = await prettier.format(content, {
+      parser,
+      ...prettierConfig,
+      filepath: fp || undefined
+    });
+    res.json({ formatted });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// ─── TODO / FIXME Scanner ────────────────────────────────
+app.post('/api/todos/scan', async (req, res) => {
+  try {
+    const projectPath = ctx.projectPath;
+    if (!projectPath) return res.status(400).json({ error: 'No project open' });
+
+    const TODO_PATTERN = /\b(TODO|FIXME|HACK|NOTE|XXX|BUG|OPTIMIZE)\b[:\s]*(.*)/gi;
+    const MAX_RESULTS = 500;
+    const BINARY_EXTS = new Set(['.png','.jpg','.jpeg','.gif','.webp','.bmp','.ico','.svg',
+      '.woff','.woff2','.ttf','.eot','.mp3','.mp4','.wav','.ogg','.zip','.tar','.gz',
+      '.rar','.7z','.pdf','.exe','.dll','.so','.dylib','.o','.pyc','.class','.gguf',
+      '.bin','.dat','.db','.sqlite','.lock']);
+    const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', '__pycache__',
+      '.venv', 'venv', '.cache', 'coverage', '.idea', '.vscode']);
+
+    const results = [];
+
+    function scanDir(dir) {
+      if (results.length >= MAX_RESULTS) return;
+      let entries;
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
+      for (const entry of entries) {
+        if (results.length >= MAX_RESULTS) break;
+        if (entry.name.startsWith('.') && entry.name !== '.env') continue;
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (!SKIP_DIRS.has(entry.name)) scanDir(fullPath);
+        } else if (entry.isFile()) {
+          const ext = path.extname(entry.name).toLowerCase();
+          if (BINARY_EXTS.has(ext)) continue;
+          try {
+            const content = fs.readFileSync(fullPath, 'utf-8');
+            const lines = content.split('\n');
+            for (let i = 0; i < lines.length && results.length < MAX_RESULTS; i++) {
+              let match;
+              TODO_PATTERN.lastIndex = 0;
+              while ((match = TODO_PATTERN.exec(lines[i])) !== null) {
+                results.push({
+                  file: path.relative(projectPath, fullPath).replace(/\\/g, '/'),
+                  line: i + 1,
+                  type: match[1].toUpperCase(),
+                  text: match[2].trim() || match[0].trim()
+                });
+                if (results.length >= MAX_RESULTS) break;
+              }
+            }
+          } catch (_) { /* skip unreadable files */ }
+        }
+      }
+    }
+
+    scanDir(projectPath);
+    res.json({ todos: results, total: results.length, capped: results.length >= MAX_RESULTS });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Session management

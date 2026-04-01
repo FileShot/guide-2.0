@@ -16,7 +16,7 @@ import FileIcon from './FileIcon';
 import {
   X, Circle, FolderOpen, MessageSquare, Settings,
   FileText, Copy,
-  Eye, Code2, Play, ExternalLink, Globe
+  Eye, Code2, Play, ExternalLink, Globe, Wand2
 } from 'lucide-react';
 
 export default function EditorArea() {
@@ -208,6 +208,28 @@ export default function EditorArea() {
               {previewMode[activeTab.id] ? 'Code' : 'Preview'}
             </button>
           )}
+          <button
+            className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] text-vsc-text-dim hover:text-vsc-text hover:bg-vsc-list-hover transition-colors"
+            onClick={async () => {
+              if (!activeTab) return;
+              const ext = activeTab.path.split('.').pop().toLowerCase();
+              try {
+                const r = await fetch('/api/format', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ content: activeTab.content, language: ext, filePath: activeTab.path })
+                });
+                const data = await r.json();
+                if (r.ok && data.formatted) {
+                  useAppStore.getState().updateTabContent(activeTab.id, data.formatted);
+                }
+              } catch (_) {}
+            }}
+            title="Format Document (Shift+Alt+F)"
+          >
+            <Wand2 size={12} />
+            Format
+          </button>
         </div>
       )}
 

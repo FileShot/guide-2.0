@@ -516,6 +516,21 @@ const useAppStore = create((set, get) => ({
     }
   },
 
+  // TODO highlighting
+  todoItems: [],
+  todoLoading: false,
+  setTodoItems: (items) => set({ todoItems: items }),
+  setTodoLoading: (v) => set({ todoLoading: v }),
+  scanTodos: async () => {
+    set({ todoLoading: true });
+    try {
+      const r = await fetch('/api/todos/scan', { method: 'POST' });
+      const data = await r.json();
+      if (data.todos) set({ todoItems: data.todos });
+    } catch (_) {}
+    set({ todoLoading: false });
+  },
+
   toggleSidebar: () => set(s => ({ sidebarVisible: !s.sidebarVisible })),
   setSidebarWidth: (w) => set({ sidebarWidth: Math.max(180, Math.min(600, w)) }),
   togglePanel: () => set(s => ({ panelVisible: !s.panelVisible })),
