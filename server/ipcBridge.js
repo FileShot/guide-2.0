@@ -101,6 +101,7 @@ class MainWindowBridge {
   constructor() {
     this._destroyed = false;
     this._wsSender = null; // Set by transport when a client connects
+    this._hasEverConnected = false; // Suppress warnings before first client connects
     this.webContents = {
       send: (event, data) => {
         if (this._destroyed) return;
@@ -118,6 +119,7 @@ class MainWindowBridge {
   setSender(sender) {
     this._wsSender = sender;
     this._destroyed = false;
+    this._hasEverConnected = true;
   }
 
   /**
@@ -139,8 +141,9 @@ class MainWindowBridge {
    */
   _sendToFrontend(event, data) {
     if (!this._wsSender) {
-      // Log only for important events (not every token — too noisy)
-      if (event !== 'llm-token' && event !== 'llm-thinking-token' && event !== 'context-usage') {
+      // Only warn if we previously had a connection (lost connection = real problem).
+      // Before first connection, this is expected (model auto-load fires before WebSocket connects).
+      if (this._hasEverConnected && event !== 'llm-token' && event !== 'llm-thinking-token' && event !== 'context-usage') {
         console.warn(`[MainWindowBridge] _sendToFrontend: no sender for event '${event}' — dropped`);
       }
       return;

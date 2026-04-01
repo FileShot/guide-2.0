@@ -16,6 +16,9 @@ import {
   CheckCircle2, Circle, Loader2, ListTodo
 } from 'lucide-react';
 
+// guIDE Cloud AI — bundled providers with pre-seeded keys, rotated for rate-limit avoidance
+const GUIDE_CLOUD_PROVIDERS = new Set(['cerebras', 'groq', 'sambanova', 'google', 'openrouter']);
+
 // R43-Fix-B: Streaming-scoped error boundary.
 // Catches React render errors in MarkdownRenderer during streaming and shows
 // the raw text as fallback instead of crashing the entire app.
@@ -484,7 +487,7 @@ export default function ChatPanel() {
     try {
       const activeTab = store.openTabs.find(t => t.id === store.activeTabId);
       const s = store.settings;
-      const result = await (await import('../api/websocket')).invoke('ai-chat', text, {
+      const result = await window.electronAPI.aiChat(text, {
         projectPath: store.projectPath,
         currentFile: (!fileContextDismissed && activeTab) ? { path: activeTab.path, content: activeTab.content } : null,
         selectedCode: null,
@@ -682,7 +685,7 @@ export default function ChatPanel() {
 
   const handleStop = useCallback(async () => {
     try {
-      await (await import('../api/websocket')).invoke('agent-pause');
+      await window.electronAPI.agentPause();
     } catch (_) {}
   }, []);
 
@@ -713,7 +716,7 @@ export default function ChatPanel() {
     : 0;
 
   const modelDisplayName = cloudProvider
-    ? (cloudProvider === 'graysoft' ? 'Cloud AI' : cloudProvider.charAt(0).toUpperCase() + cloudProvider.slice(1))
+    ? (GUIDE_CLOUD_PROVIDERS.has(cloudProvider) ? 'guIDE Cloud AI' : cloudProvider.charAt(0).toUpperCase() + cloudProvider.slice(1))
     : modelInfo
       ? (modelInfo.family || modelInfo.name || '').split('/').pop().slice(0, 20)
       : 'No Model';
@@ -1781,16 +1784,16 @@ function ModelPickerDropdown({ onClose, models, currentModel }) {
                 {/* guIDE Cloud AI — bundled entry */}
                 <button
                   className={`w-full text-left px-2 py-2 text-[11px] hover:bg-vsc-list-hover flex items-center gap-2 border-b border-vsc-panel-border/20 ${
-                    cloudProvider === 'graysoft' ? 'bg-vsc-list-active' : ''
+                    GUIDE_CLOUD_PROVIDERS.has(cloudProvider) ? 'bg-vsc-list-active' : ''
                   }`}
-                  onClick={() => selectCloudModel('graysoft', 'graysoft-cloud')}
+                  onClick={() => selectCloudModel('sambanova', 'Meta-Llama-3.3-70B-Instruct')}
                 >
                   <Sparkles size={12} className="text-vsc-accent flex-shrink-0" />
                   <div className="min-w-0 flex-1">
                     <div className="text-vsc-text font-medium">guIDE Cloud AI</div>
                     <div className="text-[10px] text-vsc-text-dim">Auto-routes to fastest free provider</div>
                   </div>
-                  {cloudProvider === 'graysoft' && <Check size={12} className="text-vsc-accent flex-shrink-0" />}
+                  {GUIDE_CLOUD_PROVIDERS.has(cloudProvider) && <Check size={12} className="text-vsc-accent flex-shrink-0" />}
                 </button>
 
                 {/* Add Your Own Key — Free */}

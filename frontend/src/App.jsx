@@ -3,7 +3,6 @@
  */
 import { useEffect, useCallback } from 'react';
 import useAppStore from './stores/appStore';
-import { connect, invoke } from './api/websocket';
 import ThemeProvider from './components/ThemeProvider';
 import Layout from './components/Layout';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -223,12 +222,58 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    connect(
-      handleEvent,
-      (connected) => {
-        useAppStore.getState().setConnected(connected);
-      }
-    );
+    const api = window.electronAPI;
+    if (!api) {
+      // Fallback: legacy WebSocket mode (dev server without Electron)
+      import('./api/websocket').then(({ connect }) => {
+        connect(handleEvent, (connected) => useAppStore.getState().setConnected(connected));
+      });
+      return;
+    }
+
+    // Mark as connected immediately in Electron IPC mode
+    useAppStore.getState().setConnected(true);
+
+    // Fire connection-ready to load initial state
+    handleEvent('connection-ready', null);
+
+    // Register IPC event listeners — each returns a cleanup function
+    const cleanups = [
+      api.onLlmToken?.((d) => handleEvent('llm-token', d)),
+      api.onLlmThinkingToken?.((d) => handleEvent('llm-thinking-token', d)),
+      api.onLlmToolGenerating?.((d) => handleEvent('llm-tool-generating', d)),
+      api.onLlmIterationBegin?.((d) => handleEvent('llm-iteration-begin', d)),
+      api.onLlmReplaceLast?.((d) => handleEvent('llm-replace-last', d)),
+      api.onLlmStatus?.((d) => handleEvent('llm-status', d)),
+      api.onLlmFileAccUpdate?.((d) => handleEvent('llm-file-acc-update', d)),
+      api.onFileContentStart?.((d) => handleEvent('file-content-start', d)),
+      api.onFileContentToken?.((d) => handleEvent('file-content-token', d)),
+      api.onFileContentEnd?.((d) => handleEvent('file-content-end', d)),
+      api.onContextUsage?.((d) => handleEvent('context-usage', d)),
+      api.onAgenticProgress?.((d) => handleEvent('agentic-progress', d)),
+      api.onTokenStats?.((d) => handleEvent('token-stats', d)),
+      api.onToolExecuting?.((d) => handleEvent('tool-executing', d)),
+      api.onMcpToolResults?.((d) => handleEvent('mcp-tool-results', d)),
+      api.onToolCheckpoint?.((d) => handleEvent('tool-checkpoint', d)),
+      api.onFilesChanged?.((d) => handleEvent('files-changed', d)),
+      api.onOpenFile?.((d) => handleEvent('open-file', d)),
+      api.onAgentFileModified?.((d) => handleEvent('agent-file-modified', d)),
+      api.onModelLoaded?.((d) => handleEvent('model-loaded', d)),
+      api.onModelLoading?.((d) => handleEvent('model-loading', d)),
+      api.onModelError?.((d) => handleEvent('model-error', d)),
+      api.onModelsUpdated?.((d) => handleEvent('models-updated', d)),
+      api.onProjectOpened?.((d) => handleEvent('project-opened', d)),
+      api.onTodoUpdate?.((d) => handleEvent('todo-update', d)),
+      api.onAgentPaused?.((d) => handleEvent('agent-paused', d)),
+      api.onDownloadStarted?.((d) => handleEvent('download-started', d)),
+      api.onDownloadProgress?.((d) => handleEvent('download-progress', d)),
+      api.onDownloadComplete?.((d) => handleEvent('download-complete', d)),
+      api.onDownloadError?.((d) => handleEvent('download-error', d)),
+      api.onDownloadCancelled?.((d) => handleEvent('download-cancelled', d)),
+      api.onDebugEvent?.((d) => handleEvent('debug-event', d)),
+    ].filter(Boolean);
+
+    return () => cleanups.forEach(fn => fn());
   }, [handleEvent]);
 
   // Listen for native Electron menu actions (sent via IPC from appMenu.js)

@@ -4,6 +4,82 @@
 
 ---
 
+## 2026-04-02 — Phase 4: Full IPC Architecture Conversion
+
+### Phase 4A: New electron-main.js (IPC architecture)
+**File:** electron-main.js (1144 lines, replaces old 286-line fork-based version)
+- **Old version backed up to:** electron-main-old.js
+- **What was removed:** Child process fork of server/main.js, HTTP server, Express, WebSocket transport, port management, backend health-check polling
+- **What was added:** All services imported and instantiated in-process (llmEngine, mcpToolServer, modelManager, cloudLLM, sessionStore, settingsManager, gitManager, browserManager, ragEngine, debugService, extensionManager, etc.). Single `ipcMain.handle('api-fetch', ...)` handler with URL-based routing converting ALL 77+ REST endpoints. PTY terminal over IPC (terminal-create/write/resize/destroy). Event forwarding via mainWindow.webContents.send(). AutoUpdater with registerIPC(ipcMain). App lifecycle with graceful shutdown.
+- **Architecture:** No HTTP server, no Express, no WebSocket for main communication. All frontend-backend communication is Electron IPC. liveServer.js (browser preview) kept as-is (separate HTTP server for serving user project files).
+
+### Phase 4B: New preload.js (expanded IPC surface)
+**File:** preload.js (128 lines, replaces old 37-line version)
+- **Old version backed up to:** preload-old.js
+- **What was added:** `apiFetch(url, options)` — fetch bridge entry point via IPC. `aiChat(message, context)` / `agentPause()` / `agentResume()` — direct AI IPC. `terminal.*` (create, write, resize, destroy, onData, onExit). 25+ event listener methods covering every event type (llm-token, file-content-*, context-usage, tool-executing, model events, download events, debug events, etc.). All return cleanup functions.
+- **What was kept:** windowControls, dialogs, updater, onMenuAction — all existing functionality preserved.
+
+### Phase 4C: Frontend fetch bridge + event conversion
+**File:** frontend/src/main.jsx
+- **What was added:** Fetch bridge — overrides `window.fetch` for `/api/*` URLs, routes through `window.electronAPI.apiFetch()` via IPC. Returns Response-like object with `.json()` and `.text()` methods. Falls through to real fetch when not in Electron.
+- **Why:** Avoids rewriting 110 fetch() calls across 14 frontend component files.
+
+**File:** frontend/src/App.jsx
+- **What was removed:** `import { connect, invoke } from './api/websocket'` — WebSocket connection
+- **What was added:** IPC event listeners — 32 `window.electronAPI.onXxx()` calls in useEffect, each forwarding to the existing `handleEvent()` callback. WebSocket fallback preserved via dynamic import for dev server mode (non-Electron).
+- **Connection behavior:** In Electron mode, sets connected immediately and fires 'connection-ready' to load initial state. Each listener returns a cleanup function used in useEffect teardown.
+
+**File:** frontend/src/components/ChatPanel.jsx
+- **Line 490:** `(await import('../api/websocket')).invoke('ai-chat', ...)` replaced with `window.electronAPI.aiChat(text, {...})`
+- **Line 688:** `(await import('../api/websocket')).invoke('agent-pause')` replaced with `window.electronAPI.agentPause()`
+
+### Phase 4D: Terminal over IPC
+**File:** frontend/src/components/BottomPanel.jsx (XTermPanel function)
+- **What was removed:** WebSocket connection to `/ws/terminal`, JSON message protocol (create/input/resize/output/exit)
+- **What was added:** IPC terminal via `window.electronAPI.terminal.create/write/resize/destroy`. Event listeners via `onData`/`onExit`. Cleanup now calls `terminal.destroy()` on unmount. Resize now calls `terminal.resize()` through IPC.
+- **Fallback:** WebSocket path preserved as else-branch for dev server mode without Electron.
+
+### Phase 4E: File swap + activation
+- `electron-main.js` (old fork version) → `electron-main-old.js`
+- `electron-main-ipc.js` (new IPC version) → `electron-main.js`
+- `preload.js` (old 37-line version) → `preload-old.js`
+- `preload-ipc.js` (new 128-line version) → `preload.js`
+- `package.json` `"main"` field already pointed to `"electron-main.js"` — no change needed.
+- server/main.js, server/_electronShim.js, server/ipcBridge.js, server/transport.js — kept intact (not deleted), usable for web deployment or reference.
+
+---
+
+## 2026-04-02 — Phase 2: Fix "no sender for event" startup warning
+
+**File:** server/ipcBridge.js
+- **Line 103:** Added `this._hasEverConnected = false` in MainWindowBridge constructor
+- **Line 121:** Set `this._hasEverConnected = true` in `setSender()`
+- **Line 146:** Warning only fires if `_hasEverConnected === true` (startup events silently dropped instead of warning)
+- **Observable effect:** No more "no sender for event llm-status" flash on startup before WebSocket connects
+
+---
+
+## 2026-04-02 — Phase 1: Fix guIDE Cloud AI display and provider
+
+**File:** frontend/src/components/ChatPanel.jsx
+- **Line 20:** Added `const GUIDE_CLOUD_PROVIDERS = new Set(['cerebras', 'groq', 'sambanova', 'google', 'openrouter']);`
+- **Line 719:** Changed display from `'Cloud AI'` to `'guIDE Cloud AI'` when bundled provider is active
+- **Line 1787:** Changed active highlight from `cloudProvider === 'graysoft'` to `GUIDE_CLOUD_PROVIDERS.has(cloudProvider)`
+- **Line 1789:** Changed onClick from `selectCloudModel('graysoft', 'graysoft-cloud')` to `selectCloudModel('sambanova', 'Meta-Llama-3.3-70B-Instruct')`
+- **Line 1796:** Changed checkmark condition to match
+- **Observable effect:** "guIDE Cloud AI" button now selects sambanova (bundled provider with seeded key), displays "guIDE Cloud AI" not provider/model name
+
+---
+
+## 2026-04-01 — COMPARISON.md: Full codebase comparison document
+
+**File:** COMPARISON.md (new file, ~500 lines)
+**What was added:** Comprehensive comparison between original IDE (v1.8.54, C:\Users\brend\IDE) and guide-2.0 (v2.2.10), created from exhaustive file-by-file reading of both codebases.
+**Covers:** Architecture (Electron IPC vs server+WebSocket), transport layers, preload differences (~200 methods vs ~10), frontend (34.9K lines/89 files vs 13.8K lines/33 files), pipeline (guide-2.0 is more advanced), backend services (8 identical files, 16+ differing), build/CI, feature matrix (15+ missing feature panels), root cause of guide-2.0 Electron problems (server architecture for what should be a native Electron app).
+**Why:** User requested full comparison to establish proper understanding before fixing the Electron app.
+
+---
+
 ## 2026-04-01 — v2.2.10: Fix cloud model silence + graysoft provider
 
 ### Fix A: Cloud model errors not displayed to user

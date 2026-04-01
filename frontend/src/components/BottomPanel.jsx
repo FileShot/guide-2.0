@@ -122,17 +122,18 @@ function XTermPanel() {
   const termRef = useRef(null);
   const xtermRef = useRef(null);
   const fitAddonRef = useRef(null);
-  const wsRef = useRef(null);
+  const termIdRef = useRef(null);
   const modeRef = useRef(null); // 'pty' | 'exec' | null
   const [loaded, setLoaded] = useState(false);
   const activeTerminalTab = useAppStore(s => s.activeTerminalTab);
 
-  // Initialize xterm.js + WebSocket PTY
+  // Initialize xterm.js + IPC PTY
   useEffect(() => {
     let term = null;
     let fitAddon = null;
-    let ws = null;
     let disposed = false;
+    let cleanupData = null;
+    let cleanupExit = null;
 
     async function initXterm() {
       try {
@@ -195,65 +196,96 @@ function XTermPanel() {
         fitAddonRef.current = fitAddon;
         setLoaded(true);
 
-        // Connect to PTY WebSocket
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/ws/terminal`;
-        ws = new WebSocket(wsUrl);
-        wsRef.current = ws;
+        const api = window.electronAPI;
 
-        ws.onopen = () => {
-          // Request a PTY process
-          ws.send(JSON.stringify({
-            type: 'create',
-            terminalId: activeTerminalTab,
+        // Try IPC PTY first (Electron mode)
+        if (api?.terminal) {
+          const termId = activeTerminalTab || `pty-${Date.now()}`;
+          termIdRef.current = termId;
+
+          // Listen for data from this terminal
+          cleanupData = api.terminal.onData((msg) => {
+            if (msg.terminalId === termId && msg.data) {
+              term.write(msg.data);
+            }
+          });
+
+          cleanupExit = api.terminal.onExit((msg) => {
+            if (msg.terminalId === termId) {
+              term.writeln(`\r\n\x1b[90m[Process exited with code ${msg.exitCode}]\x1b[0m`);
+            }
+          });
+
+          // Create the PTY process
+          const result = await api.terminal.create({
+            terminalId: termId,
             cols: term.cols,
             rows: term.rows,
-          }));
-        };
+          });
 
-        ws.onmessage = (event) => {
-          let msg;
-          try { msg = JSON.parse(event.data); } catch (_) { return; }
-
-          if (msg.type === 'output') {
-            term.write(msg.data);
-          } else if (msg.type === 'ready') {
+          if (result?.success) {
             modeRef.current = 'pty';
-          } else if (msg.type === 'no-pty') {
-            // Fall back to exec mode
+            // Forward input to PTY via IPC
+            term.onData((data) => {
+              if (modeRef.current === 'pty') {
+                api.terminal.write(termId, data);
+              }
+            });
+          } else {
+            // PTY not available — exec fallback
             modeRef.current = 'exec';
             term.writeln('Terminal');
-            term.writeln('\x1b[90mnode-pty not available — using command execution fallback\x1b[0m');
-            term.writeln('');
-            term.write('> ');
-            _setupExecMode(term);
-          } else if (msg.type === 'exit') {
-            term.writeln(`\r\n\x1b[90m[Process exited with code ${msg.exitCode}]\x1b[0m`);
-          }
-        };
-
-        ws.onerror = () => {
-          // WebSocket failed — use exec fallback
-          if (!modeRef.current) {
-            modeRef.current = 'exec';
-            term.writeln('Terminal');
-            term.writeln('\x1b[90mUsing command execution mode\x1b[0m');
+            term.writeln('\x1b[90mnode-pty not available \u2014 using command execution fallback\x1b[0m');
             term.writeln('');
             term.write('> ');
             _setupExecMode(term);
           }
-        };
+        } else {
+          // No Electron API — try legacy WebSocket
+          const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+          const wsUrl = `${protocol}//${window.location.host}/ws/terminal`;
+          const ws = new WebSocket(wsUrl);
 
-        ws.onclose = () => {
-          wsRef.current = null;
-        };
+          ws.onopen = () => {
+            ws.send(JSON.stringify({ type: 'create', terminalId: activeTerminalTab, cols: term.cols, rows: term.rows }));
+          };
+          ws.onmessage = (event) => {
+            let msg;
+            try { msg = JSON.parse(event.data); } catch (_) { return; }
+            if (msg.type === 'output') term.write(msg.data);
+            else if (msg.type === 'ready') modeRef.current = 'pty';
+            else if (msg.type === 'no-pty') {
+              modeRef.current = 'exec';
+              term.writeln('Terminal');
+              term.writeln('\x1b[90mnode-pty not available \u2014 using command execution fallback\x1b[0m');
+              term.writeln('');
+              term.write('> ');
+              _setupExecMode(term);
+            } else if (msg.type === 'exit') {
+              term.writeln(`\r\n\x1b[90m[Process exited with code ${msg.exitCode}]\x1b[0m`);
+            }
+          };
+          ws.onerror = () => {
+            if (!modeRef.current) {
+              modeRef.current = 'exec';
+              term.writeln('Terminal');
+              term.writeln('\x1b[90mUsing command execution mode\x1b[0m');
+              term.writeln('');
+              term.write('> ');
+              _setupExecMode(term);
+            }
+          };
 
-        // PTY mode: forward all input directly to server
-        term.onData((data) => {
-          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && modeRef.current === 'pty') {
-            wsRef.current.send(JSON.stringify({ type: 'input', data }));
-          }
-        });
+          term.onData((data) => {
+            if (ws.readyState === WebSocket.OPEN && modeRef.current === 'pty') {
+              ws.send(JSON.stringify({ type: 'input', data }));
+            }
+          });
+
+          // Store ws ref for cleanup and resize
+          termIdRef.current = null;
+          cleanupData = () => { if (ws.readyState === WebSocket.OPEN) ws.close(); };
+        }
 
       } catch (err) {
         console.error('Failed to initialize xterm:', err);
@@ -264,12 +296,16 @@ function XTermPanel() {
 
     return () => {
       disposed = true;
-      if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+      if (cleanupData) cleanupData();
+      if (cleanupExit) cleanupExit();
+      if (termIdRef.current && window.electronAPI?.terminal) {
+        window.electronAPI.terminal.destroy(termIdRef.current);
+      }
       if (term) {
         term.dispose();
         xtermRef.current = null;
         fitAddonRef.current = null;
-        wsRef.current = null;
+        termIdRef.current = null;
       }
     };
   }, [activeTerminalTab]);
@@ -281,12 +317,8 @@ function XTermPanel() {
         try {
           fitAddonRef.current.fit();
           // Notify PTY of new size
-          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && xtermRef.current) {
-            wsRef.current.send(JSON.stringify({
-              type: 'resize',
-              cols: xtermRef.current.cols,
-              rows: xtermRef.current.rows,
-            }));
+          if (termIdRef.current && window.electronAPI?.terminal && xtermRef.current) {
+            window.electronAPI.terminal.resize(termIdRef.current, xtermRef.current.cols, xtermRef.current.rows);
           }
         } catch {}
       }
