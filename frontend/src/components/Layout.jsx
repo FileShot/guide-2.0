@@ -38,9 +38,18 @@ export default function Layout() {
   const commandPaletteOpen = useAppStore(s => s.commandPaletteOpen);
   const modelLoading = useAppStore(s => s.modelLoading);
   const modelLoadProgress = useAppStore(s => s.modelLoadProgress);
+  const zoomLevel = useAppStore(s => s.zoomLevel);
 
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden bg-vsc-bg">
+    <div
+      className="flex flex-col overflow-hidden bg-vsc-bg"
+      style={{
+        transform: `scale(${zoomLevel})`,
+        transformOrigin: 'top left',
+        width: `${100 / zoomLevel}vw`,
+        height: `${100 / zoomLevel}vh`,
+      }}
+    >
       {/* Title Bar */}
       <TitleBar />
 

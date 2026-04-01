@@ -277,6 +277,60 @@ app.post('/api/models/add', async (req, res) => {
   }
 });
 
+// Upload GGUF model files (browser fallback when Electron dialog unavailable)
+app.post('/api/models/upload', async (req, res) => {
+  const contentType = req.headers['content-type'] || '';
+  if (!contentType.includes('multipart/form-data')) {
+    return res.status(400).json({ error: 'multipart/form-data required' });
+  }
+  const boundaryMatch = contentType.match(/boundary=(.+)/);
+  if (!boundaryMatch) return res.status(400).json({ error: 'Missing boundary' });
+  const boundary = boundaryMatch[1];
+
+  try {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const buffer = Buffer.concat(chunks);
+    const sep = Buffer.from(`--${boundary}`);
+    const parts = [];
+    let start = 0;
+    while (true) {
+      const idx = buffer.indexOf(sep, start);
+      if (idx === -1) break;
+      if (start > 0) parts.push(buffer.slice(start, idx));
+      start = idx + sep.length;
+      // Skip CRLF after boundary
+      if (buffer[start] === 0x0D && buffer[start + 1] === 0x0A) start += 2;
+    }
+
+    const saved = [];
+    const fsP = require('fs').promises;
+    for (const part of parts) {
+      const headerEnd = part.indexOf('\r\n\r\n');
+      if (headerEnd === -1) continue;
+      const headers = part.slice(0, headerEnd).toString('utf8');
+      const filenameMatch = headers.match(/filename="([^"]+)"/);
+      if (!filenameMatch) continue;
+      const filename = path.basename(filenameMatch[1]); // sanitize
+      if (!filename.endsWith('.gguf')) continue;
+      // Strip trailing CRLF
+      let body = part.slice(headerEnd + 4);
+      if (body[body.length - 2] === 0x0D && body[body.length - 1] === 0x0A) {
+        body = body.slice(0, -2);
+      }
+      const destPath = path.join(modelManager.modelsDir, filename);
+      await fsP.writeFile(destPath, body);
+      saved.push(filename);
+    }
+
+    if (saved.length === 0) return res.status(400).json({ error: 'No .gguf files found in upload' });
+    await modelManager.scanModels();
+    res.json({ success: true, saved });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // GPU info + system resources
 app.get('/api/gpu', async (req, res) => {
   try {

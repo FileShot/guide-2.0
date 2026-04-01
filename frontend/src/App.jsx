@@ -380,6 +380,21 @@ export default function App() {
         e.preventDefault();
         s.setShowNewProjectDialog(true);
       }
+      // Ctrl+= / Ctrl++ — Zoom In
+      if (e.ctrlKey && (e.key === '=' || e.key === '+')) {
+        e.preventDefault();
+        s.zoomIn();
+      }
+      // Ctrl+- — Zoom Out
+      if (e.ctrlKey && e.key === '-') {
+        e.preventDefault();
+        s.zoomOut();
+      }
+      // Ctrl+0 — Reset Zoom
+      if (e.ctrlKey && e.key === '0') {
+        e.preventDefault();
+        s.zoomReset();
+      }
       // Escape — Close command palette
       if (e.key === 'Escape') {
         if (s.commandPaletteOpen) s.closeCommandPalette();

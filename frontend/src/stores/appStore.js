@@ -449,6 +449,7 @@ const useAppStore = create((set, get) => ({
   panelHeight: 200,
   chatPanelVisible: true,
   chatPanelWidth: 380,
+  zoomLevel: 1,
   activeActivity: 'explorer', // 'explorer' | 'search' | 'git' | 'chat' | 'extensions' | 'settings'
   activePanelTab: 'terminal', // 'terminal' | 'output' | 'problems'
 
@@ -458,6 +459,10 @@ const useAppStore = create((set, get) => ({
   setPanelHeight: (h) => set({ panelHeight: Math.max(100, Math.min(600, h)) }),
   toggleChatPanel: () => set(s => ({ chatPanelVisible: !s.chatPanelVisible })),
   setChatPanelWidth: (w) => set({ chatPanelWidth: Math.max(300, Math.min(800, w)) }),
+  setZoomLevel: (z) => set({ zoomLevel: z }),
+  zoomIn: () => set(s => ({ zoomLevel: Math.min(2, +(s.zoomLevel + 0.1).toFixed(1)) })),
+  zoomOut: () => set(s => ({ zoomLevel: Math.max(0.5, +(s.zoomLevel - 0.1).toFixed(1)) })),
+  zoomReset: () => set({ zoomLevel: 1 }),
   setActiveActivity: (a) => set(s => {
     if (s.activeActivity === a && s.sidebarVisible) {
       return { sidebarVisible: false };

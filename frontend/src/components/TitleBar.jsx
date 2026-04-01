@@ -508,9 +508,9 @@ function executeMenuAction(action) {
     case 'toggleChat': store.toggleChatPanel(); return;
     case 'toggleMinimap': store.updateSetting('minimapEnabled', !store.settings.minimapEnabled); return;
     case 'toggleWordWrap': store.updateSetting('wordWrap', store.settings.wordWrap === 'on' ? 'off' : 'on'); return;
-    case 'zoomIn': document.body.style.zoom = `${(parseFloat(document.body.style.zoom || '1') + 0.1)}`; return;
-    case 'zoomOut': document.body.style.zoom = `${Math.max(0.5, parseFloat(document.body.style.zoom || '1') - 0.1)}`; return;
-    case 'zoomReset': document.body.style.zoom = '1'; return;
+    case 'zoomIn': store.zoomIn(); return;
+    case 'zoomOut': store.zoomOut(); return;
+    case 'zoomReset': store.zoomReset(); return;
 
     // Go
     case 'goToFile': store.toggleCommandPalette(); return;

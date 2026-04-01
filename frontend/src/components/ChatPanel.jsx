@@ -365,7 +365,6 @@ export default function ChatPanel() {
   const cloudProvider = useAppStore(s => s.cloudProvider);
 
   const [input, setInput] = useState('');
-  const [autoMode, setAutoMode] = useState(false);
   const [planMode, setPlanMode] = useState(false);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const inputRef = useRef(null);
@@ -493,7 +492,6 @@ export default function ChatPanel() {
         cloudProvider: store.cloudProvider,
         cloudModel: store.cloudModel,
         params: {
-          autoMode,
           planMode,
           temperature: s.temperature,
           maxTokens: s.maxResponseTokens,
@@ -692,14 +690,14 @@ export default function ChatPanel() {
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      handleSend();
-    } else if (e.key === 'Enter' && e.shiftKey && chatStreaming) {
-      // Queue message while AI is streaming
-      e.preventDefault();
       const text = input.trim();
-      if (text) {
+      if (!text) return;
+      if (chatStreaming) {
+        // Queue message while AI is streaming
         addQueuedMessage(text);
         setInput('');
+      } else {
+        handleSend();
       }
     }
   };
@@ -1066,12 +1064,12 @@ export default function ChatPanel() {
             <textarea
               ref={textareaRef}
               className="w-full bg-transparent border-none outline-none text-vsc-base text-vsc-text resize-none placeholder:text-vsc-text-dim"
-              placeholder={chatStreaming ? 'guIDE is thinking...' : (modelLoaded ? 'Ask guIDE anything...' : 'Load a model to start...')}
+              placeholder={chatStreaming ? 'Type to queue a message...' : (modelLoaded ? 'Ask guIDE anything...' : 'Load a model to start...')}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
-              disabled={!connected || chatStreaming}
+              disabled={!connected}
               rows={1}
               style={{ minHeight: '28px', maxHeight: '200px' }}
             />
@@ -1106,20 +1104,6 @@ export default function ChatPanel() {
 
             {/* Separator */}
             <div className="w-px h-4 bg-vsc-panel-border/50 mx-0.5" />
-
-            {/* Auto mode toggle */}
-            <button
-              className={`flex items-center gap-1 px-2 py-1 rounded-md text-vsc-xs font-medium transition-colors ${
-                autoMode
-                  ? 'bg-vsc-accent/15 text-vsc-accent'
-                  : 'text-vsc-text-dim hover:bg-vsc-list-hover hover:text-vsc-text'
-              }`}
-              onClick={() => setAutoMode(!autoMode)}
-              title="Auto mode — let guIDE execute tools automatically"
-            >
-              <Zap size={12} />
-              <span>Auto</span>
-            </button>
 
             {/* Plan mode toggle */}
             <button
@@ -1313,6 +1297,7 @@ function ModelPickerDropdown({ onClose, models, currentModel }) {
   const setCloudModel = useAppStore(s => s.setCloudModel);
 
   const [searchFilter, setSearchFilter] = useState('');
+  const modelFileInputRef = useRef(null);
   const [expandedProviders, setExpandedProviders] = useState({});
   const [inlineKeyValues, setInlineKeyValues] = useState({});
   const [inlineKeyStatus, setInlineKeyStatus] = useState({}); // 'saved' | 'error'
@@ -2078,20 +2063,48 @@ function ModelPickerDropdown({ onClose, models, currentModel }) {
           )}
 
           {/* Add Model Files + Rescan */}
+          <input
+            ref={modelFileInputRef}
+            type="file"
+            multiple
+            accept=".gguf"
+            className="hidden"
+            onChange={async (e) => {
+              const files = Array.from(e.target.files);
+              if (!files.length) return;
+              try {
+                const formData = new FormData();
+                files.forEach(f => formData.append('models', f));
+                const resp = await fetch('/api/models/upload', { method: 'POST', body: formData });
+                const data = await resp.json();
+                if (data.success) {
+                  addNotification({ type: 'info', message: `Added ${data.saved.length} model file(s).` });
+                  onClose();
+                } else {
+                  addNotification({ type: 'error', message: data.error || 'Upload failed.' });
+                }
+              } catch (err) {
+                addNotification({ type: 'error', message: 'Failed to upload model files.' });
+              }
+              e.target.value = '';
+            }}
+          />
           <button
             className="w-full text-left px-2 py-1.5 text-[11px] text-vsc-accent hover:bg-vsc-list-hover border-t border-vsc-panel-border/30 flex items-center gap-2"
             onClick={async () => {
-              try {
-                const result = await window.electronAPI?.modelsAdd();
-                if (result?.success) {
-                  // Trigger a rescan so the new models appear in the list
-                  try { await window.electronAPI?.modelsScan(); } catch { await fetch('/api/models/scan', { method: 'POST' }); }
-                  onClose();
-                } else if (!window.electronAPI?.modelsAdd) {
-                  addNotification({ type: 'info', message: 'Add .gguf files to your models folder, then click Rescan.' });
+              if (window.electronAPI?.modelsAdd) {
+                try {
+                  const result = await window.electronAPI.modelsAdd();
+                  if (result?.success) {
+                    try { await window.electronAPI?.modelsScan(); } catch { await fetch('/api/models/scan', { method: 'POST' }); }
+                    onClose();
+                  }
+                } catch {
+                  addNotification({ type: 'error', message: 'Failed to add model files.' });
                 }
-              } catch {
-                addNotification({ type: 'info', message: 'Add .gguf files to your models folder, then click Rescan.' });
+              } else {
+                // Browser fallback — open file picker
+                modelFileInputRef.current?.click();
               }
             }}
           >

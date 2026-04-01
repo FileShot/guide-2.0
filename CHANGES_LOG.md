@@ -4,6 +4,33 @@
 
 ---
 
+## 2026-04-01 — v2.2.6 UX Fixes (Model Files, Zoom, Queue, Auto Mode)
+
+### Fix A: Add Model Files — Browser Fallback
+**Files:** ChatPanel.jsx (ModelPickerDropdown), server/main.js
+- **Symptom:** "Add Model Files" showed notification "Add .gguf files to your models folder, then click Rescan" in browser/dev mode instead of opening file picker.
+- **Root cause:** `window.electronAPI?.modelsAdd` is undefined outside Electron. Fallback only showed a notification.
+- **Change:** Added hidden `<input type="file" accept=".gguf" multiple>` element in ModelPickerDropdown. When Electron API unavailable, clicking "Add Model Files" triggers native browser file picker. Files upload via new `POST /api/models/upload` endpoint (multipart parsing, saves to modelsDir, triggers rescan). Added `modelFileInputRef` to component.
+
+### Fix B: Zoom — Ctrl+/Ctrl- Shortcuts + Viewport Fix
+**Files:** App.jsx, Layout.jsx, TitleBar.jsx, appStore.js
+- **Symptom:** Ctrl+ didn't zoom in (only menu worked). Viewport overflowed on zoom and didn't recover on zoom out.
+- **Root cause:** No keyboard event listeners for zoom shortcuts. Used `document.body.style.zoom` which causes layout overflow issues.
+- **Change:** Added `zoomLevel` state + `zoomIn/zoomOut/zoomReset` actions to appStore. Added Ctrl+= / Ctrl+- / Ctrl+0 keyboard shortcuts in App.jsx. Replaced `document.body.style.zoom` with CSS `transform: scale()` + inverse width/height on Layout root div. TitleBar menu actions now use store methods.
+
+### Fix C: Remove Auto Mode
+**Files:** ChatPanel.jsx
+- **Symptom:** Auto mode toggle existed but had no real value — local inference can only load one model at a time, making task-based model switching impractical.
+- **Change:** Removed Auto Mode button from bottom toolbar. Removed `autoMode` state variable and its reference in `doSend` params. Zap icon import kept (used elsewhere).
+
+### Fix D: Queue Messaging — Enable Input During Streaming
+**Files:** ChatPanel.jsx
+- **Symptom:** Can't type in chat input while model is generating. Queue infrastructure (appStore, queue display, auto-processing) existed but textarea was disabled during streaming.
+- **Root cause:** `disabled={!connected || chatStreaming}` on textarea prevented all interaction during streaming.
+- **Change:** Changed to `disabled={!connected}`. Updated `handleKeyDown` so Enter during streaming queues the message (no Shift needed). Changed placeholder during streaming to "Type to queue a message..." instead of "guIDE is thinking...".
+
+---
+
 ## 2026-04-01 — v2.2.5 UI Polish (VS Code Copilot-style)
 
 ### ToolCallCard.jsx — Full Redesign
