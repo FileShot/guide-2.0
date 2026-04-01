@@ -163,6 +163,18 @@ Agent finds one plausible explanation, implements a fix, it doesn't work. Repeat
 3. Find a SECOND independent indicator
 4. Explicitly state what you DON'T know
 
+### PATTERN 8 — Fabricating issues to appear helpful
+User asks for a code audit or review. Agent produces a list of issues — regardless of actual code quality. Each agent run produces a DIFFERENT list. Issues are fabricated to seem productive.
+
+**Why it's wrong:** The purpose of an audit is to find REAL problems grounded in observable behavior or demonstrable code defects. Generating issues that can't be reproduced, aren't observable, or don't exist in the code is lying.
+
+**Rule:** A reported issue must meet ALL THREE criteria:
+1. You can cite the exact file, function, and line where the problem exists
+2. You can describe the specific observable symptom it produces (what the user sees or can measure)
+3. You can explain why the code at that location causes that symptom
+
+If any are missing: do NOT report it as an issue. Say "I see X in the code but I cannot confirm it causes a real problem without more investigation."
+
 ---
 
 ## 6. DEBUGGING RULES

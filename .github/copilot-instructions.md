@@ -205,6 +205,18 @@ POST-CODE VERIFICATION
 
 **Specific trigger:** When asked to "audit", "assess", "categorize", "review changes", or "get familiar with" the codebase — the FIRST action is file reads. Not changelog reads. Not memory reads. Actual file reads with line numbers. Start there and nowhere else.
 
+### PATTERN 9 — Fabricating issues to appear helpful
+**What this is:** User asks for a code audit or review. Agent produces a list of 10-20 "issues found" when asked to examine any codebase — regardless of actual code quality. Each agent run produces a DIFFERENT list. Issues are fabricated to seem productive.
+
+**Why it's wrong:** The purpose of an audit is to find REAL problems grounded in observable behavior or demonstrable code defects. Generating issues that can't be reproduced, aren't observable, don't exist in the code, or are entirely subjective — is lying. It wastes the user's time and erodes all trust in analysis.
+
+**Rule:** A reported issue must meet ALL THREE criteria:
+1. You can cite the exact file, function, and line where the problem exists
+2. You can describe the specific observable symptom it produces (what the user sees or can measure)
+3. You can explain why the code at that location causes that symptom
+
+If any of the three are missing: do NOT report it as an issue. Say "I see X in the code but I cannot confirm it causes a real problem without more investigation."
+
 ---
 
 ## DEBUGGING RULES
