@@ -43,9 +43,11 @@ class Transport {
    * Start the WebSocket server.
    */
   start() {
+    // Use noServer mode so we don't register an automatic upgrade handler
+    // that would reject non-matching paths (like /ws/terminal) with HTTP 400.
+    // Upgrade routing is handled centrally in server/main.js.
     this._wss = new WebSocket.Server({
-      server: this._httpServer,
-      path: '/ws',
+      noServer: true,
       maxPayload: 50 * 1024 * 1024, // 50MB — large tool results, file contents
     });
 
@@ -119,8 +121,10 @@ class Transport {
     if (msg.type === 'invoke') {
       // Invoke an IPC handler and return the result
       const { id, channel, args } = msg;
+      console.log(`[Transport] Invoke: channel='${channel}', id=${id}, argsLen=${JSON.stringify(args || []).length}`);
       try {
         const result = await this._ipcMain.invoke(channel, ...(args || []));
+        console.log(`[Transport] Invoke '${channel}' completed, sending response`);
         this._sendToClient(ws, { type: 'response', id, result, error: null });
       } catch (err) {
         console.error(`[Transport] Handler error for '${channel}':`, err.message);
@@ -186,6 +190,16 @@ class Transport {
    */
   hasClients() {
     return this._clients.size > 0;
+  }
+
+  /**
+   * Handle an HTTP upgrade request for the /ws path.
+   * Called from the centralized upgrade handler in server/main.js.
+   */
+  handleUpgrade(request, socket, head) {
+    this._wss.handleUpgrade(request, socket, head, (ws) => {
+      this._wss.emit('connection', ws, request);
+    });
   }
 
   /**

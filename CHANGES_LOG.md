@@ -4,6 +4,31 @@
 
 ---
 
+## 2026-04-01 — v2.2.9: WebSocket fix + comprehensive pipeline logging
+
+### Fix A: WebSocket /ws/terminal returning HTTP 400
+**Files:** server/transport.js (lines 46-51), server/main.js (lines 1313-1322)
+- **Symptom:** Browser console showed `WebSocket connection to 'ws://localhost:3000/ws/terminal' failed: Error during WebSocket handshake: Unexpected response code: 400`
+- **Root cause:** Transport created its WebSocket.Server with `{ server, path: '/ws' }`. The `ws` library's internal upgrade handler fires FIRST for ALL upgrade requests. When path doesn't match `/ws` (e.g. `/ws/terminal`), it calls `abortHandshake(socket, 400)` destroying the socket BEFORE the manual `server.on('upgrade')` handler in main.js can route it to the pty WebSocket server.
+- **Removed:** `server: this._httpServer, path: '/ws'` from WSS options in transport.js
+- **Added:** `noServer: true` to WSS options in transport.js. New `handleUpgrade(request, socket, head)` method on Transport class.
+- **Changed:** `server.on('upgrade')` in main.js now routes ALL upgrade requests: `/ws` → `transport.handleUpgrade()`, `/ws/terminal` → `ptyWss.handleUpgrade()`, else → `socket.destroy()`
+
+### Fix B: Comprehensive pipeline logging for model hang diagnosis
+**Files:** agenticChat.js, pipeline/agenticLoop.js, llmEngine.js, cloudLLMService.js, server/transport.js, server/ipcBridge.js, frontend/src/App.jsx, frontend/src/api/websocket.js
+- **Symptom:** Model loads, user sends message, loading indicator stays forever, no response for BOTH local AND cloud models.
+- **Logging added to trace the ENTIRE message flow end-to-end:**
+  - **Frontend websocket.js:** Logs invoke calls with channel name, logs connection URL, logs WebSocket not-connected errors with readyState
+  - **Frontend App.jsx:** Logs all non-token events received from backend (event name + data)
+  - **server/transport.js:** Logs invoke receipt (channel, id, args length) and completion
+  - **server/ipcBridge.js:** Warns when _sendToFrontend drops events due to no WebSocket sender
+  - **agenticChat.js:** Logs ai-chat handler entry with message length and cloud provider/model, logs path decision (cloud vs local vs none), logs cloud/local path entry and return, logs handleCloudChat entry and cloud status check, logs pipeline errors with stack traces
+  - **pipeline/agenticLoop.js:** Logs "Init complete — entering loop", "Request is stale", "Deadline exceeded", "Calling generateStream" with iteration and message length
+  - **llmEngine.js:** Logs generateStream entry with isReady/hasChat/hasModel/hasContext/hasSequence status, logs _runGeneration entry, logs "Awaiting _runGeneration", logs completion with response length, logs chat.generateResponse call parameters
+  - **cloudLLMService.js:** Logs generate() entry with provider/model/hasKey/promptLen, logs _executeGeneration with provider routing decision
+
+---
+
 ## 2026-04-01 — v2.2.7: Prettier Formatting, TODO Highlighting, Extension Marketplace
 
 ### New: Prettier Code Formatting

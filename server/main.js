@@ -1316,8 +1316,11 @@ server.on('upgrade', (request, socket, head) => {
     ptyWss.handleUpgrade(request, socket, head, (ws) => {
       ptyWss.emit('connection', ws, request);
     });
+  } else if (url.pathname === '/ws') {
+    transport.handleUpgrade(request, socket, head);
+  } else {
+    socket.destroy();
   }
-  // /ws is handled by Transport's own WSS instance
 });
 
 ptyWss.on('connection', (ws) => {

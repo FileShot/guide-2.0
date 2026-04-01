@@ -16,6 +16,10 @@ export default function App() {
 
   const handleEvent = useCallback((event, data) => {
     const s = useAppStore.getState();
+    // Log all events except high-frequency token streaming
+    if (event !== 'llm-token' && event !== 'llm-thinking-token' && event !== 'context-usage') {
+      console.log(`[App] Event received: '${event}'`, typeof data === 'string' ? data.substring(0, 100) : data);
+    }
     switch (event) {
       case 'connection-ready':
         // Fetch initial state

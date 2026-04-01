@@ -87,7 +87,10 @@ function register(ctx) {
 
   // ─── IPC: Main AI Chat Handler ───────────────────────────
   ipcMain.handle('ai-chat', async (_, message, context) => {
+    console.log(`[AgenticChat] ai-chat received: msgLen=${message?.length || 0}, cloudProvider=${context?.cloudProvider || 'none'}, cloudModel=${context?.cloudModel || 'none'}`);
     const mainWindow = ctx.getMainWindow();
+    if (!mainWindow) console.warn('[AgenticChat] WARNING: mainWindow is null');
+    else if (mainWindow.isDestroyed()) console.warn('[AgenticChat] WARNING: mainWindow.isDestroyed() = true');
     const MAX_AGENTIC_ITERATIONS = context?.params?.maxIterations
       || context?.maxIterations
       || _readConfig()?.userSettings?.maxAgenticIterations
@@ -138,17 +141,24 @@ function register(ctx) {
 
 
       // ─── Cloud Path ───────────────────────────────────
+      console.log(`[AgenticChat] Path decision: cloudProvider='${context?.cloudProvider || ''}', cloudModel='${context?.cloudModel || ''}', willUseCloud=${!!(context?.cloudProvider && context?.cloudModel)}, llmReady=${llmEngine.isReady}`);
       if (context?.cloudProvider && context?.cloudModel) {
-        return await handleCloudChat(ctx, effectiveMessage, context, {
+        console.log(`[AgenticChat] Entering CLOUD path: ${context.cloudProvider}/${context.cloudModel}`);
+        const cloudResult = await handleCloudChat(ctx, effectiveMessage, context, {
           mainWindow, isStale, waitWhilePaused, _readConfig, _reportTokenStats,
         });
+        console.log(`[AgenticChat] Cloud path returned: success=${cloudResult?.success}`);
+        return cloudResult;
       }
 
       // ─── Local Path — NEW PIPELINE ────────────────────
-      return await pipelineLocalChat(ctx, effectiveMessage, context, {
+      console.log('[AgenticChat] Entering LOCAL path');
+      const localResult = await pipelineLocalChat(ctx, effectiveMessage, context, {
         mainWindow, isStale, waitWhilePaused, _readConfig, _reportTokenStats,
         MAX_AGENTIC_ITERATIONS,
       });
+      console.log(`[AgenticChat] Local path returned: success=${localResult?.success}`);
+      return localResult;
     } catch (error) {
       console.error('[AgenticChat] Pipeline error:', error.stack || error.message || error);
       return { success: false, error: error.message };
@@ -198,6 +208,7 @@ function register(ctx) {
   //  Cloud Chat Handler (unchanged from original)
   // ═══════════════════════════════════════════════════════════
   async function handleCloudChat(ctx, message, context, helpers) {
+    console.log(`[AgenticChat] handleCloudChat started: provider=${context.cloudProvider}, model=${context.cloudModel}`);
     const { mainWindow, isStale, waitWhilePaused, _readConfig, _reportTokenStats } = helpers;
     const { cloudLLM, mcpToolServer, playwrightBrowser, browserManager, ragEngine, memoryStore, webSearch, licenseManager } = ctx;
 
@@ -213,7 +224,9 @@ function register(ctx) {
     }
 
     const cloudStatus = cloudLLM.getStatus();
+    console.log(`[AgenticChat] Cloud status: providers=[${cloudStatus.providers.join(',')}], requested=${context.cloudProvider}`);
     if (!cloudStatus.providers.includes(context.cloudProvider)) {
+      console.log(`[AgenticChat] Cloud provider '${context.cloudProvider}' NOT in available providers — returning error`);
       return { success: false, error: `Provider "${context.cloudProvider}" not configured.` };
     }
 

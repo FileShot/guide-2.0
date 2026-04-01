@@ -138,7 +138,13 @@ class MainWindowBridge {
    * Internal: send an event to the frontend via WebSocket.
    */
   _sendToFrontend(event, data) {
-    if (!this._wsSender) return;
+    if (!this._wsSender) {
+      // Log only for important events (not every token — too noisy)
+      if (event !== 'llm-token' && event !== 'llm-thinking-token' && event !== 'context-usage') {
+        console.warn(`[MainWindowBridge] _sendToFrontend: no sender for event '${event}' — dropped`);
+      }
+      return;
+    }
     try {
       this._wsSender(event, data);
     } catch (e) {

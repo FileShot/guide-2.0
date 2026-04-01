@@ -667,7 +667,11 @@ class LLMEngine extends EventEmitter {
 
   // ─── Generation ───
   async generateStream(input, params = {}, onToken, onThinkingToken) {
-    if (!this.isReady || !this.chat) throw new Error('Model not ready');
+    console.log(`[LLM] generateStream called: isReady=${this.isReady}, hasChat=${!!this.chat}, hasModel=${!!this.model}, hasContext=${!!this.context}, hasSequence=${!!this.sequence}`);
+    if (!this.isReady || !this.chat) {
+      console.error(`[LLM] generateStream BLOCKED: isReady=${this.isReady}, chat=${!!this.chat}`);
+      throw new Error('Model not ready');
+    }
 
     // Parse input
     let userMessage, systemContext;
@@ -860,7 +864,9 @@ class LLMEngine extends EventEmitter {
     this._activeGenerationPromise = new Promise(r => { resolveGenDone = r; });
 
     try {
+      console.log('[LLM] Awaiting _runGeneration...');
       const result = await this._runGeneration(merged, onResponseChunk);
+      console.log(`[LLM] _runGeneration completed: responseLen=${fullResponse.length}, hasLastEval=${!!result?.lastEvaluation}`);
 
       // Flush remaining tag buffer
       if (tagBuffer) {
@@ -939,6 +945,7 @@ class LLMEngine extends EventEmitter {
   }
 
   async _runGeneration(params, onResponseChunk) {
+    console.log(`[LLM] _runGeneration started: hasSequence=${!!this.sequence}, hasChat=${!!this.chat}, hasContext=${!!this.context}, historyLen=${this.chatHistory?.length || 0}`);
     // KV cache reuse
     const useKvCache = this._kvReuseCooldown <= 0 && this.lastEvaluation;
 
@@ -1023,6 +1030,7 @@ class LLMEngine extends EventEmitter {
       contextShiftOpts.lastEvaluationMetadata = this.lastEvaluation?.contextShiftMetadata;
     }
 
+    console.log(`[LLM] Calling chat.generateResponse: historyLen=${this.chatHistory.length}, maxTokens=${params.maxTokens || this.defaultParams.maxTokens}, useKvCache=${useKvCache}, seqNextToken=${this.sequence?.nextTokenIndex || 0}`);
     return this.chat.generateResponse(this.chatHistory, {
       maxTokens: params.maxTokens || this.defaultParams.maxTokens,
       temperature: params.temperature,

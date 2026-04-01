@@ -778,6 +778,7 @@ class CloudLLMService extends EventEmitter {
   async generate(prompt, options = {}) {
     const provider = options.provider || this.activeProvider;
     const model = options.model || this.activeModel;
+    console.log(`[CloudLLM] generate called: provider=${provider}, model=${model}, hasKey=${!!this.apiKeys[provider]}, promptLen=${prompt?.length || 0}, stream=${options.stream}`);
     const systemPrompt = options.systemPrompt || CLOUD_SYSTEM_PROMPT;
     const onToken = options.onToken;
     const onThinkingToken = options.onThinkingToken || null;
@@ -953,6 +954,7 @@ class CloudLLMService extends EventEmitter {
   // ─── Provider routing ───────────────────────────────────────────────────────
 
   _executeGeneration(provider, model, systemPrompt, prompt, options, onToken, conversationHistory, onThinkingToken, images = [], overrideKey = null) {
+    console.log(`[CloudLLM] _executeGeneration: provider=${provider}, model=${model}, isOllama=${provider === 'ollama'}, isAnthropic=${provider === 'anthropic'}, stream=${!!onToken}, historyLen=${conversationHistory?.length || 0}`);
     if (provider === 'ollama') {
       return this._generateOllama(model, systemPrompt, prompt, options, onToken, conversationHistory, onThinkingToken, images);
     }

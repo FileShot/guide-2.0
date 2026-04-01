@@ -255,14 +255,18 @@ async function handleLocalChat(ctx, message, context, helpers) {
   let d6RetryCount = 0;              // R27-A: D6 give-up retry counter (was this._d6RetryCount — crashed because this is undefined)
   let lastContextPercent = 100;      // R39-B2: Track context% to detect context shifts between iterations
 
+  console.log(`[AgenticLoop] Init complete — entering loop (history=${llmEngine.chatHistory.length} entries, maxIter=${MAX_AGENTIC_ITERATIONS})`);
+
   // ═══ THE AGENTIC LOOP ═══════════════════════════════════
   for (let iteration = 1; iteration <= MAX_AGENTIC_ITERATIONS; iteration++) {
     // ── Guard: cancellation + timeout ──────────────────────
     if (isStale()) {
+      console.log('[AgenticLoop] Request is stale — exiting');
       stream._send('llm-token', '\n*[Interrupted]*\n');
       return { success: false, error: 'Request cancelled', text: fullResponseText };
     }
     if (Date.now() > deadline) {
+      console.log('[AgenticLoop] Deadline exceeded — exiting');
       stream._send('llm-token', '\n*[Time limit reached]*\n');
       break;
     }
@@ -367,6 +371,8 @@ async function handleLocalChat(ctx, message, context, helpers) {
         }
       }
     }
+
+    console.log(`[AgenticLoop] Calling generateStream (iter=${iteration}, msgLen=${nextUserMessage?.length || 0})`);
 
     let result;
     try {

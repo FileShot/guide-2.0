@@ -47,7 +47,7 @@ function _doConnect() {
   }
 
   _ws.onopen = () => {
-    console.log('[WS] Connected');
+    console.log('[WS] Connected to', url);
     _reconnectAttempt = 0;
     if (_connectionHandler) _connectionHandler(true);
   };
@@ -122,9 +122,11 @@ function _scheduleReconnect() {
 export function invoke(channel, ...args) {
   return new Promise((resolve, reject) => {
     if (!_ws || _ws.readyState !== WebSocket.OPEN) {
+      console.error(`[WS] invoke('${channel}') — WebSocket not connected (readyState=${_ws?.readyState})`);
       reject(new Error('WebSocket not connected'));
       return;
     }
+    console.log(`[WS] invoke('${channel}') — sending`);
 
     const id = `inv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     _pendingInvokes.set(id, { resolve, reject });
