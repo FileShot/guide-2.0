@@ -4,6 +4,79 @@
 
 ---
 
+## 2026-04-01 — v2.2.5 UI Polish (VS Code Copilot-style)
+
+### ToolCallCard.jsx — Full Redesign
+- **Removed:** Border-left bar, verbose labels, large icons
+- **Added:** `TOOL_MAP` dict mapping function names to `{ Icon, pendingVerb, doneVerb, detailFn }`. Compact `[Icon] verb • detail` format at 11px. `agent-shimmer` gradient animation on pending text. Error state in `text-vsc-error/70`. Click-to-expand with ChevronRight/Down on right side.
+
+### index.css — Shimmer Keyframe
+- **Added:** `@keyframes agent-shimmer` + `.agent-shimmer` class using `background-clip: text` gradient trick. Background: var(--guide-text-dim) → var(--guide-text) → var(--guide-text-dim), animated at 1.8s linear infinite.
+
+### TitleBar.jsx — Layout Toggle Buttons
+- **Added:** PanelLeft/PanelBottom/PanelRight/LayoutTemplate imports from lucide-react. New state subscriptions: `sidebarVisible, panelVisible, chatPanelVisible, toggleSidebar, togglePanel, toggleChatPanel`. Three panel toggle buttons (active = `text-vsc-text`, inactive = `text-vsc-text-dim/50`). LayoutTemplate dropdown with Default layout / Focus Mode / Show all panels presets using `useAppStore.setState()` directly.
+
+### BottomPanel.jsx — Full Upgrade
+- **Added:** PORTS and DEBUG CONSOLE tabs. `problemsCount` badge from store. Terminal instance chips moved to RIGHT side of header (shown only when terminal tab active). Plus/ChevronDown/MoreHorizontal controls on far right. `PlaceholderPanel` component for non-implemented tabs.
+
+### ChatPanel.jsx — Files-Changed Banner + Iteration Indicator
+- **Changed:** Files-changed section (~L927): Single-line VS Code-style banner `N file(s) changed +X -Y [Keep] [Undo]` with text buttons. Removed icon-only Keep/Undo buttons. Keep/Undo are now text buttons (Keep = vsc-success color, Undo = vsc-text-dim).
+- **Changed:** StreamingFooter iteration indicator (~L222): Replaced plain `<span className="text-vsc-accent">Step N/M</span>` with "Starting: Step N/M" + 3-dot bounce animation using animationDelay offsets (0ms, 80ms, 160ms).
+
+---
+
+## 2026-04-01 — 7-Fix Pipeline Overhaul (Operations Studio Stress Test)
+
+All fixes from analysis of operations-studio.html stress test. Test config: Qwen3.5-2B-Q8_0, TEST_MAX_CONTEXT=8000.
+
+### Fix 1A: Unescape Order Bug (responseParser.js, agenticLoop.js, streamHandler.js)
+- **Symptom:** ~380 lines of CSS contaminated with trailing `\` at end of every line.
+- **Root cause:** `.replace(/\\n/g, '\n')` ran BEFORE `.replace(/\\\\/g, '\\')`. For `\\n`, the `\\n` match consumed chars 1-2, leaving char 0 (`\`) as stray backslash.
+- **Change:** Created `_unescapeJsonContent()` function in responseParser.js using placeholder technique: `\\\\` → `\x00ESCAPED_BACKSLASH` → process `\\n`/`\\t`/etc → restore placeholder to `\\`. Applied to ALL 5 unescape locations:
+  - responseParser.js: `extractContentFromPartialToolCall` (2 chains)
+  - agenticLoop.js: CONTEXT_OVERFLOW path, T31-Fix salvage, R28-1b salvage (3 chains)
+  - streamHandler.js: content type sniffing, `_streamFileContent` main unescape (2 chains)
+- Exported `_unescapeJsonContent` from responseParser.js, imported in agenticLoop.js and streamHandler.js.
+
+### Fix 1B: Parser 1000-Char Length Guard (responseParser.js)
+- **Symptom:** Every file-writing tool call (>1000 chars) fell through to regex salvage instead of JSON.parse.
+- **Root cause:** `parseToolCallJson` had `if (jsonStr.length < 1000 && jsonStr.includes('\\"'))` — blanket guard prevented de-escaping of all large content.
+- **Change:** Replaced blanket guard with targeted structural de-escaping. Finds `"content"` key position, de-escapes only JSON structure before it (keys, braces, colons), preserves content value intact. Fallback: full de-escape for strings <1000 chars.
+
+### Fix 2A: Prose Leak Into File Content (agenticLoop.js)
+- **Symptom:** Model's summary prose ("Perfect! The Operations Studio HTML file is now complete...") written into file at lines 637-659.
+- **Root cause:** R36-Phase5 prose regex missed patterns starting with "Perfect!", "Great!", "Excellent!", emojis, markdown dividers.
+- **Change:** Broadened `_proseRe` regex in R36-Phase5 salvage stripping (agenticLoop.js ~L1148). Added: `Perfect|Great|Excellent|That's|Now you|You can|The (application|code|program|project|page)|✅|👉|🎉|---\n`.
+
+### Fix 2B: JSON Structure Leak / Holdback Too Small (streamHandler.js)
+- **Symptom:** `}"` and `}` characters leaked into HTML file at line ~569.
+- **Root cause:** HOLDBACK buffer was 3 chars. JSON closing pattern `"}\n}` is 4+ chars.
+- **Change:** Increased HOLDBACK from 3 to 8 at streamHandler.js (was L345). Flush regex at finalize already handles variable whitespace.
+
+### Fix 3A: File Never Completed / R38-Fix-C Retries (agenticLoop.js, continuationHandler.js)
+- **Symptom:** 660 lines of CSS, no `<body>`, `<script>`, `</html>`. File structurally 100% incomplete.
+- **Root cause:** R38-Fix-C allowed only 1 retry (`eogStructuralRetries < 1`). After one failed retry, system accepted the incomplete file. Continuation message was generic — model stayed pattern-locked in CSS.
+- **Changes:**
+  1. agenticLoop.js: Changed retry limit from `< 1` to `< 3`.
+  2. agenticLoop.js: Added escalating retry messages — Retry 1: standard. Retry 2: explicit "close `<style>`, add `</head><body>`". Retry 3: literal code snippet with `</style></head><body>`.
+  3. continuationHandler.js: Added structural hint in `toolInProgress` branch — when HTML file has 100+ lines but no `<body>`, appends: "After finishing the current CSS, close `</style></head>` and proceed to `<body>`."
+
+### Fix 3B: Structural Completion Check (agenticLoop.js)
+- **Symptom:** `_isContentStructurallyComplete` only checked for `</html>` ending. A file ending with `</html>` but missing `<body>` would pass.
+- **Change:** For HTML files, now requires BOTH `</html>` at end AND `<body` somewhere in content.
+
+### Fix 4A: TLS Certificate Failure (webSearch.js)
+- **Symptom:** `fetch_webpage` failed with "unable to get local issuer certificate" on example.com and nodejs.org.
+- **Root cause:** Electron's bundled Node.js CA certificate store may be incomplete.
+- **Change:** Added `rejectUnauthorized: false` to `transport.get()` options in `_fetch()`.
+
+### Fix 4B: Model Wrong Tool Selection (mcpToolServer.js)
+- **Symptom:** User says "use the browser tools" — model chooses `fetch_webpage` instead of `browser_navigate`.
+- **Root cause:** Tool descriptions didn't differentiate clearly enough for small models.
+- **Change:** `fetch_webpage` description now starts with "This is NOT a browser" and directs to `browser_navigate` for browse requests. `browser_navigate` description now starts with "THIS is the browser tool" and lists trigger phrases ("open", "browse", "go to").
+
+---
+
 ## 2026-03-31 — Fix malformed tool call JSON + diagnostic logging + multi-JSON parsing
 
 ### Fix 1: De-escape malformed JSON in parseToolCallJson

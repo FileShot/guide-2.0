@@ -324,7 +324,7 @@ class MCPToolServer {
       },
       {
         name: 'fetch_webpage',
-        description: 'Fetch and extract text content from a webpage URL. Use ONLY to READ information from a web page (articles, documentation, data). Do NOT use to download CSS, fonts, images, or other resources for files you are creating — reference them via CDN links instead. Format: {"tool":"fetch_webpage","params":{"url":"https://example.com/docs"}}',
+        description: 'Fetch and extract text content from a webpage URL. This is NOT a browser — it only downloads raw HTML text. Use ONLY to READ information from a web page (articles, documentation, data). Do NOT use to download CSS, fonts, images, or other resources for files you are creating — reference them via CDN links instead. If the user says "open", "browse", or "use the browser", use browser_navigate instead. Format: {"tool":"fetch_webpage","params":{"url":"https://example.com/docs"}}',
         parameters: {
           url: { type: 'string', description: 'URL to fetch', required: true },
         },
@@ -389,7 +389,7 @@ class MCPToolServer {
       // ── Browser Tools ──
       {
         name: 'browser_navigate',
-        description: 'Navigate to a URL in an external Chrome browser controlled by Playwright. Auto-launches Chrome if needed. After navigation, call browser_snapshot to see the page.',
+        description: 'THIS is the browser tool. Navigate to a URL in an external Chrome browser controlled by Playwright. When the user says "open", "browse", "go to", or "use the browser", use THIS tool — not fetch_webpage. Auto-launches Chrome if needed. After navigation, call browser_snapshot to see the page.',
         parameters: {
           url: { type: 'string', description: 'Full URL to navigate to (must include https:// or http://)', required: true },
         },

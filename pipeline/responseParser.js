@@ -13,6 +13,25 @@
 const { matchContentValueInText } = require('./regexHelpers');
 
 /**
+ * Unescape JSON string escapes in the correct order.
+ * CRITICAL: \\\\ → \\ MUST run before \\n → \n.
+ * If \\n → \n runs first on double-escaped input (\\\\n = \\, \\, n),
+ * it matches the last two chars (\\n), converts to newline, and leaves
+ * the first \\ as a stray backslash. Processing \\\\ first collapses
+ * the double-backslash, then \\n correctly matches the remaining \\n.
+ */
+function _unescapeJsonContent(str) {
+  return str
+    .replace(/\\\\/g, '\x00ESCAPED_BACKSLASH')  // Step 1: protect real \\\\ sequences
+    .replace(/\\n/g, '\n')                          // Step 2: \\n → newline
+    .replace(/\\t/g, '\t')                          // Step 3: \\t → tab
+    .replace(/\\r/g, '\r')                          // Step 4: \\r → carriage return
+    .replace(/\\"/g, '"')                          // Step 5: \\" → quote
+    .replace(/\\\//g, '/')                          // Step 6: \\/ → slash
+    .replace(/\x00ESCAPED_BACKSLASH/g, '\\');       // Step 7: restore real backslashes
+}
+
+/**
  * Parse a model response into display text and tool calls.
  * @param {string} rawText  — Full raw text from the model
  * @param {string} stopReason — 'natural' | 'maxTokens' | 'tool_call' | etc.
@@ -252,13 +271,35 @@ function parseToolCallJson(jsonStr) {
     // Small models sometimes double-escape quotes in tool call JSON, producing
     // {"tool":"read_file","params\":{\"filePath\":\"src/app.js\"}} instead of
     // {"tool":"read_file","params":{"filePath":"src/app.js"}}.
-    // For short tool calls (not write_file with content), de-escape and retry.
-    if (jsonStr.length < 1000 && jsonStr.includes('\\"')) {
+    //
+    // Strategy: de-escape ONLY the JSON structure (keys, syntax) while preserving
+    // the "content" value string intact. This allows file-writing tool calls
+    // (which have legitimate \" inside content) to parse correctly.
+    if (jsonStr.includes('\\"')) {
       try {
-        const deescaped = jsonStr.replace(/\\"/g, '"');
+        // Find the "content" key position — everything before it is JSON structure
+        const contentKeyIdx = jsonStr.search(/"content"\s*:\s*"/i);
+        let deescaped;
+        if (contentKeyIdx > 0) {
+          // De-escape only the structure before "content" key
+          const structurePart = jsonStr.substring(0, contentKeyIdx).replace(/\\"/g, '"');
+          deescaped = structurePart + jsonStr.substring(contentKeyIdx);
+        } else {
+          // No "content" key — safe to de-escape everything (non-file-writing tool call)
+          deescaped = jsonStr.replace(/\\"/g, '"');
+        }
         const result = normalizeToolCalls(JSON.parse(deescaped));
         if (result.length > 0) return result;
       } catch { /* fall through */ }
+
+      // Fallback: full de-escape (original approach for short strings)
+      if (jsonStr.length < 1000) {
+        try {
+          const deescaped = jsonStr.replace(/\\"/g, '"');
+          const result = normalizeToolCalls(JSON.parse(deescaped));
+          if (result.length > 0) return result;
+        } catch { /* fall through */ }
+      }
     }
 
     // Models sometimes output multiple JSON objects on separate lines instead of
@@ -465,13 +506,7 @@ function extractContentFromPartialToolCall(buffer) {
           content = truncated;
         }
         try {
-          content = content
-            .replace(/\\n/g, '\n')
-            .replace(/\\t/g, '\t')
-            .replace(/\\r/g, '\r')
-            .replace(/\\"/g, '"')
-            .replace(/\\\//g, '/')
-            .replace(/\\\\/g, '\\');
+          content = _unescapeJsonContent(content);
         } catch {
           // Keep content as-is if unescaping fails
         }
@@ -511,13 +546,7 @@ function extractContentFromPartialToolCall(buffer) {
           const innerEnd = _findJsonStringEnd(inner);
           if (innerEnd !== null) inner = innerEnd;
           try {
-            inner = inner
-              .replace(/\\n/g, '\n')
-              .replace(/\\t/g, '\t')
-              .replace(/\\r/g, '\r')
-              .replace(/\\"/g, '"')
-              .replace(/\\\//g, '/')
-              .replace(/\\\\/g, '\\');
+            inner = _unescapeJsonContent(inner);
           } catch { /* keep as-is */ }
           inner = inner.replace(/["\s]*}\s*}\s*$/, '').replace(/"\s*$/, '');
           // R27-C: Strip trailing JSON array closing artifacts
@@ -564,4 +593,4 @@ function _findJsonStringEnd(captured) {
   return null; // no closing " found — string was truncated
 }
 
-module.exports = { parseResponse, extractToolCalls, cleanTrailingArtifacts, extractContentFromPartialToolCall };
+module.exports = { parseResponse, extractToolCalls, cleanTrailingArtifacts, extractContentFromPartialToolCall, _unescapeJsonContent };

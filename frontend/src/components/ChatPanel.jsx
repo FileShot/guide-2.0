@@ -220,7 +220,17 @@ function StreamingFooter() {
       <div className="text-vsc-xs text-vsc-text-dim mb-1 font-medium uppercase tracking-wider flex items-center gap-2">
         {(modelInfo?.name || 'guIDE').split('/').pop().split('-Q')[0]}
         {chatIteration && chatIteration.iteration > 1 && (
-          <span className="text-vsc-accent">Step {chatIteration.iteration}/{chatIteration.maxIterations}</span>
+          <>
+            <span className="text-vsc-text-dim/60 font-normal normal-case tracking-normal">—</span>
+            <span className="text-[10px] text-vsc-text-dim font-normal normal-case tracking-normal flex items-center gap-1">
+              Starting: Step {chatIteration.iteration}/{chatIteration.maxIterations}
+              <span className="inline-flex gap-[2px] ml-0.5">
+                {[0, 80, 160].map(d => (
+                  <span key={d} className="w-[3px] h-[3px] bg-vsc-text-dim/60 rounded-full animate-bounce inline-block" style={{ animationDelay: `${d}ms` }} />
+                ))}
+              </span>
+            </span>
+          </>
         )}
       </div>
       {chatThinkingText && (
@@ -923,67 +933,70 @@ export default function ChatPanel() {
             ) : null;
           })()}
 
-          {/* Files changed by AI */}
+          {/* Files changed by AI — VS Code-style banner */}
           {chatFilesChanged.length > 0 && (
             <div className="border-b border-vsc-panel-border/30">
-              <div className="flex items-center gap-1 px-3 pt-1.5 pb-1">
+              {/* Single-line summary with Keep/Undo text buttons */}
+              <div className="flex items-center gap-1.5 px-3 py-1">
                 <button
-                  className="flex items-center gap-1 text-[10px] text-vsc-text-dim hover:text-vsc-text"
+                  className="flex items-center gap-1 text-[11px] text-vsc-text-dim hover:text-vsc-text transition-colors"
                   onClick={() => setFilesChangedExpanded(!filesChangedExpanded)}
                 >
-                  {filesChangedExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
-                  <span className="font-medium">Files Changed</span>
-                  <span className="text-vsc-text-dim/70">({chatFilesChanged.length})</span>
+                  {filesChangedExpanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+                  <span className="font-medium">
+                    {chatFilesChanged.length} file{chatFilesChanged.length !== 1 ? 's' : ''} changed
+                  </span>
                 </button>
+                {/* Aggregate diff stats */}
+                {(() => {
+                  const added = chatFilesChanged.reduce((s, f) => s + (f.linesAdded || 0), 0);
+                  const removed = chatFilesChanged.reduce((s, f) => s + (f.linesRemoved || 0), 0);
+                  return (
+                    <>
+                      {added > 0 && <span className="text-[11px] text-vsc-success font-medium">+{added}</span>}
+                      {removed > 0 && <span className="text-[11px] text-vsc-error font-medium">-{removed}</span>}
+                    </>
+                  );
+                })()}
                 <div className="flex-1" />
                 <button
-                  className="p-0.5 hover:bg-vsc-success/10 rounded text-vsc-success"
+                  className="px-2 py-0.5 rounded text-[11px] font-medium text-vsc-success hover:bg-vsc-success/10 transition-colors"
                   title="Keep all changes"
-                  onClick={() => {/* stub — would apply all diffs */}}
+                  onClick={() => setChatFilesChanged([])}
                 >
-                  <Check size={11} />
+                  Keep
                 </button>
                 <button
-                  className="p-0.5 hover:bg-vsc-error/10 rounded text-vsc-error"
+                  className="px-2 py-0.5 rounded text-[11px] font-medium text-vsc-text-dim hover:bg-vsc-list-hover hover:text-vsc-text transition-colors"
                   title="Undo all changes"
                   onClick={() => setChatFilesChanged([])}
                 >
-                  <Undo2 size={11} />
+                  Undo
                 </button>
               </div>
+              {/* Expanded file list */}
               {filesChangedExpanded && (
                 <div className="px-3 pb-1.5 flex flex-col gap-0.5 max-h-[100px] overflow-y-auto scrollbar-thin">
                   {chatFilesChanged.map(f => (
-                    <div key={f.path} className="flex items-center gap-1 text-[10px] rounded px-1 py-0.5 hover:bg-vsc-list-hover/50 group">
+                    <div key={f.path} className="flex items-center gap-1 text-[11px] rounded px-1 py-0.5 hover:bg-vsc-list-hover/50 group">
                       <span className="text-vsc-text truncate flex-1">{f.name}</span>
                       {(f.linesAdded > 0) && <span className="text-vsc-success">+{f.linesAdded}</span>}
                       {(f.linesRemoved > 0) && <span className="text-vsc-error">-{f.linesRemoved}</span>}
                       <button
-                        className="p-0.5 hover:bg-vsc-success/10 rounded text-vsc-success opacity-0 group-hover:opacity-100"
-                        title="Keep this file's changes"
+                        className="p-0.5 text-vsc-success hover:bg-vsc-success/10 rounded opacity-0 group-hover:opacity-100 text-[10px] font-medium transition-opacity"
+                        title="Keep"
                         onClick={() => {/* stub */}}
                       >
-                        <Check size={9} />
+                        Keep
                       </button>
                       <button
-                        className="p-0.5 hover:bg-vsc-error/10 rounded text-vsc-error opacity-0 group-hover:opacity-100"
-                        title="Undo this file's changes"
+                        className="p-0.5 text-vsc-text-dim hover:text-vsc-error rounded opacity-0 group-hover:opacity-100"
+                        title="Undo"
                         onClick={() => setChatFilesChanged(chatFilesChanged.filter(cf => cf.path !== f.path))}
                       >
                         <Undo2 size={9} />
                       </button>
                     </div>
-                  ))}
-                </div>
-              )}
-              {!filesChangedExpanded && (
-                <div className="flex items-center gap-1 px-3 pb-1 overflow-x-auto scrollbar-none">
-                  {chatFilesChanged.map(f => (
-                    <span key={f.path} className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-vsc-panel-border/20 text-[10px] rounded-md flex-shrink-0">
-                      <span className="text-vsc-text truncate max-w-[100px]">{f.name}</span>
-                      {(f.linesAdded > 0) && <span className="text-vsc-success">+{f.linesAdded}</span>}
-                      {(f.linesRemoved > 0) && <span className="text-vsc-error">-{f.linesRemoved}</span>}
-                    </span>
                   ))}
                 </div>
               )}

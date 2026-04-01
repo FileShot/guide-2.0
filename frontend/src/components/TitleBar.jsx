@@ -5,7 +5,7 @@
  */
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import useAppStore from '../stores/appStore';
-import { Search, Menu, ChevronRight, X } from 'lucide-react';
+import { Search, Menu, ChevronRight, X, PanelLeft, PanelBottom, PanelRight, LayoutTemplate } from 'lucide-react';
 
 const wc = () => window.electronAPI?.windowControls;
 
@@ -14,11 +14,19 @@ export default function TitleBar() {
   const connected = useAppStore(s => s.connected);
   const fileTree = useAppStore(s => s.fileTree);
   const openFile = useAppStore(s => s.openFile);
+  const sidebarVisible = useAppStore(s => s.sidebarVisible);
+  const panelVisible = useAppStore(s => s.panelVisible);
+  const chatPanelVisible = useAppStore(s => s.chatPanelVisible);
+  const toggleSidebar = useAppStore(s => s.toggleSidebar);
+  const togglePanel = useAppStore(s => s.togglePanel);
+  const toggleChatPanel = useAppStore(s => s.toggleChatPanel);
   const [maximized, setMaximized] = useState(false);
   const [openMenu, setOpenMenu] = useState(null);    // hamburger panel
   const [expandedCat, setExpandedCat] = useState(null); // expanded category in hamburger
   const [searchActive, setSearchActive] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [layoutMenuOpen, setLayoutMenuOpen] = useState(false);
+  const layoutMenuRef = useRef(null);
   const searchInputRef = useRef(null);
 
   const projectName = projectPath ? projectPath.split(/[\\/]/).pop() : '';
@@ -36,7 +44,7 @@ export default function TitleBar() {
 
   // Close hamburger / search on Escape or click outside
   useEffect(() => {
-    if (!openMenu && !searchActive) return;
+    if (!openMenu && !searchActive && !layoutMenuOpen) return;
     const handleClick = (e) => {
       if (openMenu && !e.target.closest('.hamburger-panel') && !e.target.closest('.hamburger-trigger')) {
         setOpenMenu(null);
@@ -46,6 +54,9 @@ export default function TitleBar() {
         setSearchActive(false);
         setSearchQuery('');
       }
+      if (layoutMenuOpen && layoutMenuRef.current && !layoutMenuRef.current.contains(e.target)) {
+        setLayoutMenuOpen(false);
+      }
     };
     const handleKey = (e) => {
       if (e.key === 'Escape') {
@@ -53,6 +64,7 @@ export default function TitleBar() {
         setExpandedCat(null);
         setSearchActive(false);
         setSearchQuery('');
+        setLayoutMenuOpen(false);
       }
     };
     document.addEventListener('mousedown', handleClick);
@@ -61,7 +73,7 @@ export default function TitleBar() {
       document.removeEventListener('mousedown', handleClick);
       document.removeEventListener('keydown', handleKey);
     };
-  }, [openMenu, searchActive]);
+  }, [openMenu, searchActive, layoutMenuOpen]);
 
   // Ctrl+P to activate search bar
   useEffect(() => {
@@ -236,9 +248,75 @@ export default function TitleBar() {
         </div>
       </div>
 
-      {/* Right — Status indicators */}
-      <div className="flex items-center gap-2 pr-2" style={{ WebkitAppRegion: 'no-drag' }}>
-        <div className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-vsc-success' : 'bg-vsc-error'}`}
+      {/* Right — Layout toggles + status */}
+      <div className="flex items-center gap-0.5 pr-1" style={{ WebkitAppRegion: 'no-drag' }}>
+        {/* Layout toggle buttons — VS Code title bar style */}
+        <button
+          className={`p-1 rounded transition-colors duration-150 ${sidebarVisible ? 'text-vsc-text hover:bg-vsc-list-hover/60' : 'text-vsc-text-dim/50 hover:bg-vsc-list-hover/40 hover:text-vsc-text-dim'}`}
+          title="Toggle Primary Sidebar"
+          onClick={toggleSidebar}
+        >
+          <PanelLeft size={14} />
+        </button>
+        <button
+          className={`p-1 rounded transition-colors duration-150 ${panelVisible ? 'text-vsc-text hover:bg-vsc-list-hover/60' : 'text-vsc-text-dim/50 hover:bg-vsc-list-hover/40 hover:text-vsc-text-dim'}`}
+          title="Toggle Bottom Panel"
+          onClick={togglePanel}
+        >
+          <PanelBottom size={14} />
+        </button>
+        <button
+          className={`p-1 rounded transition-colors duration-150 ${chatPanelVisible ? 'text-vsc-text hover:bg-vsc-list-hover/60' : 'text-vsc-text-dim/50 hover:bg-vsc-list-hover/40 hover:text-vsc-text-dim'}`}
+          title="Toggle Chat Panel"
+          onClick={toggleChatPanel}
+        >
+          <PanelRight size={14} />
+        </button>
+
+        {/* Customize Layout dropdown */}
+        <div className="relative" ref={layoutMenuRef}>
+          <button
+            className={`p-1 rounded transition-colors duration-150 ${layoutMenuOpen ? 'text-vsc-text bg-vsc-list-hover/60' : 'text-vsc-text-dim hover:bg-vsc-list-hover/60 hover:text-vsc-text'}`}
+            title="Customize Layout"
+            onClick={() => setLayoutMenuOpen(!layoutMenuOpen)}
+          >
+            <LayoutTemplate size={14} />
+          </button>
+          {layoutMenuOpen && (
+            <div className="absolute top-full right-0 mt-1 bg-vsc-dropdown/95 backdrop-blur-xl border border-vsc-dropdown-border rounded-lg shadow-2xl z-[9999] w-[180px] py-1 text-[12px]">
+              <button
+                className="flex items-center w-full px-3 py-1.5 text-vsc-text-dim hover:text-vsc-text hover:bg-vsc-list-hover/60 transition-colors"
+                onClick={() => {
+                  useAppStore.setState({ sidebarVisible: true, panelVisible: false, chatPanelVisible: true });
+                  setLayoutMenuOpen(false);
+                }}
+              >
+                Default layout
+              </button>
+              <button
+                className="flex items-center w-full px-3 py-1.5 text-vsc-text-dim hover:text-vsc-text hover:bg-vsc-list-hover/60 transition-colors"
+                onClick={() => {
+                  useAppStore.setState({ sidebarVisible: false, panelVisible: false, chatPanelVisible: false });
+                  setLayoutMenuOpen(false);
+                }}
+              >
+                Focus Mode (editor only)
+              </button>
+              <button
+                className="flex items-center w-full px-3 py-1.5 text-vsc-text-dim hover:text-vsc-text hover:bg-vsc-list-hover/60 transition-colors"
+                onClick={() => {
+                  useAppStore.setState({ sidebarVisible: true, panelVisible: true, chatPanelVisible: true });
+                  setLayoutMenuOpen(false);
+                }}
+              >
+                Show all panels
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Connection status dot */}
+        <div className={`w-1.5 h-1.5 rounded-full ml-1 ${connected ? 'bg-vsc-success' : 'bg-vsc-error'}`}
              title={connected ? 'Connected' : 'Disconnected'} />
       </div>
 

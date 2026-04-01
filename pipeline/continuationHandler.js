@@ -67,6 +67,17 @@ function continuationMessage(taskContext) {
       if (fileName) {
         msg += `\nDo NOT use write_file (overwrites). Do NOT restart. Continue content after the tail shown.`;
       }
+
+      // Structural hint for HTML files stuck in CSS — nudge model toward body/script sections
+      if (fileName && /\.html?$/i.test(fileName) && lineCount > 100) {
+        const hasBody = /<body/i.test(fileContent);
+        const hasScript = /<script/i.test(fileContent);
+        if (!hasBody) {
+          msg += `\nNOTE: The file has ${lineCount} lines but no <body> section yet. After finishing the current CSS, close </style></head> and proceed to <body> with the HTML structure and JavaScript.`;
+        } else if (!hasScript && /<\/body/i.test(fileContent) === false) {
+          msg += `\nNOTE: The file has <body> started but no <script> section yet. Continue toward completing the interactive JavaScript and closing tags.`;
+        }
+      }
     } else if (taskContext.lastText) {
       const tail = (taskContext.lastText || '').slice(-400);
       msg += `\nEnds with:\n${tail}`;

@@ -100,6 +100,7 @@ class WebSearch {
           'Accept-Language': 'en-US,en;q=0.9',
         },
         timeout: this.timeout,
+        rejectUnauthorized: false, // Electron's bundled CA store may be incomplete
       }, (res) => {
         // Follow redirects
         if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {

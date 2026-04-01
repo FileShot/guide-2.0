@@ -16,7 +16,7 @@
 'use strict';
 
 const { StreamHandler } = require('./streamHandler');
-const { parseResponse, cleanTrailingArtifacts, extractContentFromPartialToolCall } = require('./responseParser');
+const { parseResponse, cleanTrailingArtifacts, extractContentFromPartialToolCall, _unescapeJsonContent } = require('./responseParser');
 const {
   postLoopCompaction,
   shouldSummarize,
@@ -56,7 +56,7 @@ function _isContentStructurallyComplete(content, filePath) {
   const ext = fp.includes('.') ? fp.split('.').pop().toLowerCase() : '';
 
   if (['html', 'htm'].includes(ext)) {
-    return /<\/html>\s*$/i.test(trimmed);
+    return /<\/html>\s*$/i.test(trimmed) && /<body/i.test(trimmed);
   } else if (ext === 'svg') {
     return /<\/svg>\s*$/i.test(trimmed);
   } else if (['xml', 'xhtml', 'xaml'].includes(ext)) {
@@ -416,13 +416,7 @@ async function handleLocalChat(ctx, message, context, helpers) {
               if (_tcContentMatch) {
                 const _tcRaw = stream._toolCallJson.substring(_tcContentMatch.index + _tcContentMatch[0].length);
                 try {
-                  _ofContent = _tcRaw
-                    .replace(/\\n/g, '\n')
-                    .replace(/\\t/g, '\t')
-                    .replace(/\\r/g, '\r')
-                    .replace(/\\"/g, '"')
-                    .replace(/\\\//g, '/')
-                    .replace(/\\\\/g, '\\');
+                  _ofContent = _unescapeJsonContent(_tcRaw);
                   // Trim trailing incomplete JSON syntax (handles both "}} and "} endings)
                   _ofContent = _ofContent.replace(/["\s]*}\s*}\s*$/, '').replace(/"\s*}\s*$/, '').replace(/"\s*$/, '');
                   _ofContent = _ofContent.replace(/\n*```\s*$/, '');
@@ -1098,13 +1092,7 @@ async function handleLocalChat(ctx, message, context, helpers) {
             if (_shContentMatch) {
               const _shRaw = stream._toolCallJson.substring(_shContentMatch.index + _shContentMatch[0].length);
               try {
-                _salvageContent = _shRaw
-                  .replace(/\\n/g, '\n')
-                  .replace(/\\t/g, '\t')
-                  .replace(/\\r/g, '\r')
-                  .replace(/\\"/g, '"')
-                  .replace(/\\\//g, '/')
-                  .replace(/\\\\/g, '\\');
+                _salvageContent = _unescapeJsonContent(_shRaw);
                 // Trim trailing incomplete JSON syntax (handles both "}} and "} endings)
                 _salvageContent = _salvageContent.replace(/["\s]*}\s*}\s*$/, '').replace(/"\s*}\s*$/, '').replace(/"\s*$/, '');
                 // R27-C: Strip trailing JSON array/object closing artifacts (e.g. "] or ";])
@@ -1152,7 +1140,8 @@ async function handleLocalChat(ctx, message, context, helpers) {
           if (_salvageContent && _salvageContent.length > 50) {
             // R36-Phase5: Strip trailing prose from salvage content before it becomes a tool call.
             // Model sometimes embeds prose ("I need to continue writing...") at the end of file content.
-            const _proseRe = /\n\n\s*(I[\u2019']ve|Here[\u2019']s|The file|Created|Written|This (?:file|creates|is)|I created|I wrote|Sure|OK|Done|I[\u2019']ll|I need to|This (?:dashboard|page|app|component|module))/i;
+            // Also catches "Perfect!", "Great!", "Done!", emojis, and markdown formatting markers.
+            const _proseRe = /\n\n\s*(I[\u2019']ve|Here[\u2019']s|The file|Created|Written|This (?:file|creates|is)|I created|I wrote|Sure|OK|Done|I[\u2019']ll|I need to|This (?:dashboard|page|app|component|module)|Perfect|Great|Excellent|That[\u2019']s|Now you|You can|The (?:application|code|program|project|page)|✅|👉|🎉|---\n)/i;
             const _proseSplit = _salvageContent.match(_proseRe);
             if (_proseSplit && _proseSplit.index !== undefined && _proseSplit.index >= 50) {
               const _strippedProse = _salvageContent.substring(_proseSplit.index);
@@ -1194,13 +1183,7 @@ async function handleLocalChat(ctx, message, context, helpers) {
             if (_shContentMatch) {
               const _shRaw = stream._toolCallJson.substring(_shContentMatch.index + _shContentMatch[0].length);
               try {
-                _r28Content = _shRaw
-                  .replace(/\\n/g, '\n')
-                  .replace(/\\t/g, '\t')
-                  .replace(/\\r/g, '\r')
-                  .replace(/\\"/g, '"')
-                  .replace(/\\\//g, '/')
-                  .replace(/\\\\/g, '\\');
+                _r28Content = _unescapeJsonContent(_shRaw);
                 _r28Content = _r28Content.replace(/["\s]*}\s*}\s*$/, '').replace(/"\s*}\s*$/, '').replace(/"\s*$/, '');
                 _r28Content = _r28Content.replace(/["';,\s]*\]\s*}\s*$/, '').replace(/["';,\s]*\]\s*$/, '');
                 _r28Content = _r28Content.replace(/\n*```\s*$/, '');
@@ -2157,7 +2140,7 @@ async function handleLocalChat(ctx, message, context, helpers) {
     if (rotationCheckpoint && rotationCheckpoint.filePath &&
         result.stopReason === 'natural' && toolCalls.length === 0 &&
         !_isContentStructurallyComplete(rotationCheckpoint.content, rotationCheckpoint.filePath) &&
-        eogStructuralRetries < 1) {
+        eogStructuralRetries < 3) {
       eogStructuralRetries++;
       continuationCount++;
       const cpContent = rotationCheckpoint.content;
@@ -2184,11 +2167,27 @@ async function handleLocalChat(ctx, message, context, helpers) {
         ? `\n\nYou already output the following content but did NOT wrap it in a tool call:\n---\n${rawText.trim().slice(0, 2000)}\n---\nUse append_to_file to save this content to "${rotationCheckpoint.filePath}" and then continue writing the rest.`
         : '';
 
-      console.log(`[AgenticLoop] R38-Fix-C: File "${rotationCheckpoint.filePath}" structurally incomplete (${lineCount} lines) after eogToken — forcing continuation (retry ${eogStructuralRetries}/1)${rawSnippet ? ` [re-prompt: ${rawText.trim().length} chars of raw output included]` : ''}`);
-      nextUserMessage = `The file "${rotationCheckpoint.filePath}" is NOT complete (${lineCount} lines so far).${missingParts} ` +
-        `Continue writing the remaining content using append_to_file. Output ONLY code — no commentary, no preamble. ` +
-        `The file currently ends with:\n${tailLines}\n\n` +
-        `Continue IMMEDIATELY after this content. Do NOT restart. Do NOT repeat existing content.${rawSnippet}`;
+      console.log(`[AgenticLoop] R38-Fix-C: File "${rotationCheckpoint.filePath}" structurally incomplete (${lineCount} lines) after eogToken — forcing continuation (retry ${eogStructuralRetries}/3)${rawSnippet ? ` [re-prompt: ${rawText.trim().length} chars of raw output included]` : ''}`);
+
+      // Escalate retry messages: retry 1 = standard, retry 2 = explicit section transition, retry 3 = literal code hint
+      if (eogStructuralRetries <= 1) {
+        nextUserMessage = `The file "${rotationCheckpoint.filePath}" is NOT complete (${lineCount} lines so far).${missingParts} ` +
+          `Continue writing the remaining content using append_to_file. Output ONLY code — no commentary, no preamble. ` +
+          `The file currently ends with:\n${tailLines}\n\n` +
+          `Continue IMMEDIATELY after this content. Do NOT restart. Do NOT repeat existing content.${rawSnippet}`;
+      } else if (eogStructuralRetries === 2) {
+        nextUserMessage = `IMPORTANT: The file "${rotationCheckpoint.filePath}" has ${lineCount} lines but is STILL missing critical sections:${missingParts}\n` +
+          `You MUST close the current section NOW and move to the next structural section. ` +
+          `If you are inside a <style> block, close it with </style> immediately, then add </head> and start <body>. ` +
+          `Use append_to_file to add the remaining HTML structure, JavaScript, and closing tags. ` +
+          `Output ONLY code — no commentary.\nFile currently ends with:\n${tailLines}`;
+      } else {
+        nextUserMessage = `FINAL ATTEMPT: The file "${rotationCheckpoint.filePath}" is ${lineCount} lines of mostly CSS/styles.${missingParts}\n` +
+          `You MUST append the body, scripts, and closing tags NOW. Start your append_to_file content with:\n` +
+          `</style>\n</head>\n<body>\n  <!-- Add the main HTML structure here -->\n` +
+          `Then add all the interactive JavaScript in a <script> tag and close with </body></html>. ` +
+          `Use append_to_file. Output ONLY code.`;
+      }
       continue;
     }
 

@@ -1,15 +1,17 @@
 /**
- * BottomPanel — Terminal, Output, and Problems tabs.
- * Terminal uses xterm.js for proper terminal rendering.
+ * BottomPanel — Terminal, Output, Problems, Debug Console, and Ports tabs.
+ * VS Code-style: tabs left, terminal instance list right, badge on Problems.
  */
 import { useState, useRef, useEffect, useCallback } from 'react';
 import useAppStore from '../stores/appStore';
-import { Terminal as TerminalIcon, FileOutput, AlertTriangle, X, Plus, Trash2 } from 'lucide-react';
+import { Terminal as TerminalIcon, FileOutput, AlertTriangle, X, Plus, Trash2, Globe, Bug, ChevronDown, MoreHorizontal } from 'lucide-react';
 
 const panelTabs = [
-  { id: 'terminal', label: 'TERMINAL', icon: TerminalIcon },
-  { id: 'output', label: 'OUTPUT', icon: FileOutput },
   { id: 'problems', label: 'PROBLEMS', icon: AlertTriangle },
+  { id: 'output', label: 'OUTPUT', icon: FileOutput },
+  { id: 'debug', label: 'DEBUG CONSOLE', icon: Bug },
+  { id: 'terminal', label: 'TERMINAL', icon: TerminalIcon },
+  { id: 'ports', label: 'PORTS', icon: Globe },
 ];
 
 export default function BottomPanel() {
@@ -22,63 +24,74 @@ export default function BottomPanel() {
   const addTerminalTab = useAppStore(s => s.addTerminalTab);
   const closeTerminalTab = useAppStore(s => s.closeTerminalTab);
 
+  // Problems count — reads from store (set to 0 by default, wired to Monaco diagnostics later)
+  const problemsCount = useAppStore(s => s.problemsCount ?? 0);
+
   return (
     <div className="flex flex-col h-full bg-vsc-panel">
       {/* Tab bar */}
       <div className="flex items-center h-[35px] border-b border-vsc-panel-border no-select flex-shrink-0">
-        <div className="flex items-center flex-1">
+        {/* Left: panel type tabs */}
+        <div className="flex items-center flex-1 min-w-0 overflow-hidden">
           {panelTabs.map(({ id, label, icon: Icon }) => (
             <button
               key={id}
-              className={`panel-tab ${activePanelTab === id ? 'active' : ''}`}
+              className={`panel-tab flex-shrink-0 ${activePanelTab === id ? 'active' : ''}`}
               onClick={() => setActivePanelTab(id)}
             >
               <Icon size={14} className="mr-1.5" />
               {label}
+              {id === 'problems' && problemsCount > 0 && (
+                <span className="ml-1.5 px-1 py-px text-[10px] rounded bg-vsc-error/20 text-vsc-error font-medium leading-none">
+                  {problemsCount}
+                </span>
+              )}
             </button>
           ))}
-
-          {/* Terminal sub-tabs (when terminal is active) */}
-          {activePanelTab === 'terminal' && (
-            <div className="flex items-center ml-2 border-l border-vsc-panel-border/50 pl-2 gap-0.5">
-              {terminalTabs.map(tab => (
-                <div
-                  key={tab.id}
-                  className={`flex items-center gap-1 px-2 py-0.5 rounded text-[11px] cursor-pointer transition-colors ${
-                    activeTerminalTab === tab.id
-                      ? 'bg-vsc-list-active text-vsc-text-bright'
-                      : 'text-vsc-text-dim hover:bg-vsc-list-hover hover:text-vsc-text'
-                  }`}
-                  onClick={() => setActiveTerminalTab(tab.id)}
-                >
-                  <TerminalIcon size={11} />
-                  <span>{tab.name}</span>
-                  {terminalTabs.length > 1 && (
-                    <button
-                      className="hover:text-vsc-error ml-0.5"
-                      onClick={(e) => { e.stopPropagation(); closeTerminalTab(tab.id); }}
-                    >
-                      <X size={10} />
-                    </button>
-                  )}
-                </div>
-              ))}
-              <button
-                className="p-0.5 hover:bg-vsc-list-hover rounded text-vsc-text-dim hover:text-vsc-text"
-                onClick={addTerminalTab}
-                title="New Terminal"
-              >
-                <Plus size={12} />
-              </button>
-            </div>
-          )}
         </div>
-        <div className="flex items-center gap-1 pr-2">
-          <button className="p-1 hover:bg-vsc-list-hover rounded" title="Clear">
-            <Trash2 size={14} className="text-vsc-text-dim" />
+
+        {/* Right: terminal instance tabs (always visible, not just when terminal active) */}
+        <div className="flex items-center gap-0.5 pl-2 border-l border-vsc-panel-border/30 flex-shrink-0">
+          {activePanelTab === 'terminal' && terminalTabs.map(tab => (
+            <div
+              key={tab.id}
+              className={`flex items-center gap-1 px-2 py-0.5 rounded text-[11px] cursor-pointer transition-colors flex-shrink-0 ${
+                activeTerminalTab === tab.id
+                  ? 'bg-vsc-list-active text-vsc-text-bright'
+                  : 'text-vsc-text-dim hover:bg-vsc-list-hover hover:text-vsc-text'
+              }`}
+              onClick={() => setActiveTerminalTab(tab.id)}
+            >
+              <TerminalIcon size={11} />
+              <span className="max-w-[80px] truncate">{tab.name}</span>
+              {terminalTabs.length > 1 && (
+                <button
+                  className="hover:text-vsc-error ml-0.5 flex-shrink-0"
+                  onClick={(e) => { e.stopPropagation(); closeTerminalTab(tab.id); }}
+                >
+                  <X size={10} />
+                </button>
+              )}
+            </div>
+          ))}
+          <button
+            className="p-1 hover:bg-vsc-list-hover rounded text-vsc-text-dim hover:text-vsc-text flex-shrink-0"
+            title="New Terminal"
+            onClick={addTerminalTab}
+          >
+            <Plus size={13} />
           </button>
-          <button className="p-1 hover:bg-vsc-list-hover rounded" title="Close Panel" onClick={togglePanel}>
-            <X size={14} className="text-vsc-text-dim" />
+          <button className="p-1 hover:bg-vsc-list-hover rounded text-vsc-text-dim hover:text-vsc-text flex-shrink-0" title="More terminal options">
+            <ChevronDown size={13} />
+          </button>
+          <button className="p-1 hover:bg-vsc-list-hover rounded text-vsc-text-dim hover:text-vsc-text flex-shrink-0" title="More actions">
+            <MoreHorizontal size={13} />
+          </button>
+          <button className="p-1 hover:bg-vsc-list-hover rounded flex-shrink-0" title="Clear" onClick={() => {}}>
+            <Trash2 size={13} className="text-vsc-text-dim" />
+          </button>
+          <button className="p-1 hover:bg-vsc-list-hover rounded flex-shrink-0" title="Close Panel" onClick={togglePanel}>
+            <X size={13} className="text-vsc-text-dim" />
           </button>
         </div>
       </div>
@@ -88,7 +101,17 @@ export default function BottomPanel() {
         {activePanelTab === 'terminal' && <XTermPanel />}
         {activePanelTab === 'output' && <OutputPanel />}
         {activePanelTab === 'problems' && <ProblemsPanel />}
+        {activePanelTab === 'debug' && <PlaceholderPanel label="Debug Console" />}
+        {activePanelTab === 'ports' && <PlaceholderPanel label="Ports" />}
       </div>
+    </div>
+  );
+}
+
+function PlaceholderPanel({ label }) {
+  return (
+    <div className="flex items-center justify-center h-full text-vsc-text-dim/40 text-[12px]">
+      {label}
     </div>
   );
 }

@@ -631,3 +631,22 @@ input[type="range"]::-moz-range-thumb {
   cursor: pointer;
   border: 2px solid rgb(var(--guide-bg));
 }
+
+/* ─── Agent shimmer — VS Code Copilot "processing" wave ─ */
+@keyframes agent-shimmer {
+  0%   { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+.agent-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgb(var(--guide-text-dim)) 30%,
+    rgb(var(--guide-text))     50%,
+    rgb(var(--guide-text-dim)) 70%
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: agent-shimmer 1.8s linear infinite;
+}

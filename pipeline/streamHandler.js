@@ -12,6 +12,7 @@
 // mcpToolServer._normalizeFsParams handles.
 const FILE_PATH_RE = /"(?:filePath|file_path|path|filename|file_name|file)"\s*:\s*"([^"]+)"/;
 const { matchFilePathInText, matchContentStartInText } = require('./regexHelpers');
+const { _unescapeJsonContent } = require('./responseParser');
 
 class StreamHandler {
   constructor(mainWindow) {
@@ -258,13 +259,7 @@ class StreamHandler {
     }
 
     // Unescape JSON string characters
-    const unescaped = raw
-      .replace(/\\n/g, '\n')
-      .replace(/\\t/g, '\t')
-      .replace(/\\r/g, '\r')
-      .replace(/\\"/g, '"')
-      .replace(/\\\//g, '/')
-      .replace(/\\\\/g, '\\');
+    const unescaped = _unescapeJsonContent(raw);
 
     if (!this._contentStreamStarted) {
       // First time content detected in this iteration — transition to streaming mode
@@ -303,7 +298,7 @@ class StreamHandler {
           const contentMatch = matchContentStartInText(json);  // R22-Fix: also match single quote
           if (contentMatch) {
             const snippet = json.substring(contentMatch.index + contentMatch[0].length, contentMatch.index + contentMatch[0].length + 120);
-            const unSnippet = snippet.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\"/g, '"').replace(/\\\//g, '/').replace(/\\\\/g, '\\').trimStart();
+            const unSnippet = _unescapeJsonContent(snippet).trimStart();
             if (/^<!DOCTYPE\s+html/i.test(unSnippet) || /^<html[\s>]/i.test(unSnippet)) fenceLabel = 'html';
             else if (/^(?::root|html|body|\*|@charset|@import|@font-face|@media|@keyframes|\.[\w-]|#[\w-])/.test(unSnippet)) fenceLabel = 'css';
             else if (/^import\s|^from\s|^def\s|^class\s/.test(unSnippet)) fenceLabel = 'python';
@@ -342,7 +337,7 @@ class StreamHandler {
     // The holdback is flushed in finalize() with the JSON pattern stripped.
     const newContent = unescaped.substring(this._contentStreamSent);
     if (newContent) {
-      const HOLDBACK = 3;
+      const HOLDBACK = 8;
       const combined = (this._contentHoldback || '') + newContent;
       if (combined.length > HOLDBACK) {
         const safe = combined.substring(0, combined.length - HOLDBACK);
