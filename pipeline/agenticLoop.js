@@ -219,8 +219,17 @@ async function handleLocalChat(ctx, message, context, helpers) {
   // Merge sampling parameters — native context shift manages KV during generation,
   // so maxTokens is set to generationMaxTokens (= totalCtx) allowing the model to
   // generate freely. The KV cache shifts seamlessly mid-generation when full.
+  // R47-Fix: Always use generationMaxTokens (totalCtx) for the local agentic loop.
+  // Previously, context.params.maxTokens (frontend's maxResponseTokens, default 2048)
+  // was used via Math.min(), capping each generation at ~2048 tokens. This caused:
+  //   1. Tool call JSON (write_file with HTML) exceeds 2048 tokens easily → truncated mid-JSON
+  //   2. Excessive continuations (16+ iterations instead of 3-4)
+  //   3. Model loses tool call format awareness after many continuation cycles
+  //   4. Raw code leaks to chat display (naked CSS/HTML outside code blocks)
+  // The frontend's maxResponseTokens setting remains available for cloud LLM calls
+  // and UI display but does NOT limit local agentic generation.
   const params = {
-    maxTokens:     Math.min(context?.params?.maxTokens || generationMaxTokens, generationMaxTokens),
+    maxTokens:     generationMaxTokens,
     temperature:   context?.params?.temperature   ?? 0.4,
     topP:          context?.params?.topP           ?? 0.95,
     topK:          context?.params?.topK           ?? 40,
@@ -1777,6 +1786,24 @@ async function handleLocalChat(ctx, message, context, helpers) {
       // If stuck detected, also clear the recent sigs so detection resets
       if (stuckDetected) recentToolSigs.length = 0;
 
+      // R47-Fix-B: When all tool calls were file writes but generation was truncated
+      // (maxTokens), the generic "Continue with the task" message doesn't remind the
+      // model to use tool calls. This causes the model to output raw code without
+      // a tool call wrapper in subsequent iterations. Override with an explicit
+      // continuation directive that includes the tool call format.
+      if (allWriteTools && allSucceeded && result.stopReason !== 'natural' && !stuckDetected && rotationCheckpoint) {
+        const cpContent = rotationCheckpoint.content || '';
+        const lineCount = (cpContent.match(/\n/g) || []).length + 1;
+        const tailLines = cpContent.split('\n').slice(-20).join('\n');
+        nextUserMessage = `File "${rotationCheckpoint.filePath}" has ${lineCount} lines written so far but is INCOMPLETE — generation was truncated. ` +
+          `Continue writing from where you left off.\n` +
+          `Respond with ONLY a tool call in this format:\n` +
+          '```json\n{"tool":"append_to_file","params":{"filePath":"' + rotationCheckpoint.filePath + '","content":"...remaining code..."}}\n```\n' +
+          `Last 20 lines of "${rotationCheckpoint.filePath}":\n${tailLines}\n` +
+          `Continue IMMEDIATELY after this content. Do NOT restart. Do NOT repeat existing content.`;
+        console.log(`[AgenticLoop] R47-Fix-B: File write truncated at maxTokens — injecting tool call format directive for "${rotationCheckpoint.filePath}" (${lineCount} lines)`);
+      }
+
       // R16-Fix-B: When all tool calls in the iteration were file writes and
       // the model stopped naturally (eogToken), the file is likely complete.
       // Instead of "continue with the task" (which prompts the model to rewrite),
@@ -1906,13 +1933,18 @@ async function handleLocalChat(ctx, message, context, helpers) {
           } else if (ext === 'json') {
             structuralHint = 'For JSON files, all brackets and braces must be properly closed. ';
           }
+          // R47-Fix-C: Include explicit tool call format when asking model to continue
+          const appendFormat = primaryFile
+            ? `\nIf incomplete, respond with a tool call:\n` +
+              '```json\n{"tool":"append_to_file","params":{"filePath":"' + primaryFile + '","content":"...remaining code..."}}\n```'
+            : '';
           nextUserMessage = `File(s) written to disk: ${fileSummary}.\n` +
             `Original task: ${message.slice(0, 300)}\n` +
             (headLines ? `First lines of file:\n${headLines}\n...\n` : '') +
             `Last 30 lines of file:\n${tailLines}\n\n` +
             `${structuralHint}Review whether ALL content the user requested is in the file. ` +
             `If the file is INCOMPLETE (missing sections, data entries, or closing tags not yet written), ` +
-            `continue writing the remaining content using append_to_file. Do NOT restart with write_file. Do NOT repeat existing content.\n` +
+            `continue writing the remaining content. Do NOT restart with write_file. Do NOT repeat existing content.${appendFormat}\n` +
             `If ALL requested content is present and the file is structurally complete, provide a brief summary of what was created.`;
           console.log(`[AgenticLoop] R16-Fix-B (R23): File writes with natural stop — asking model to check completeness instead of assuming done`);
           fileCompletionCheckPending = true; // R31-Fix Phase 1: signal to skip Fix-M on model's summary response
@@ -2175,24 +2207,26 @@ async function handleLocalChat(ctx, message, context, helpers) {
 
       console.log(`[AgenticLoop] R38-Fix-C: File "${rotationCheckpoint.filePath}" structurally incomplete (${lineCount} lines) after eogToken — forcing continuation (retry ${eogStructuralRetries}/3)${rawSnippet ? ` [re-prompt: ${rawText.trim().length} chars of raw output included]` : ''}`);
 
-      // Escalate retry messages: retry 1 = standard, retry 2 = explicit section transition, retry 3 = literal code hint
+      // Escalate retry messages: retry 1 = standard with format, retry 2 = explicit section transition, retry 3 = literal code hint
+      // R47-Fix-C: All retries include explicit tool call format example to prevent
+      // the model from outputting raw code without a JSON wrapper.
+      const toolCallFormat = `\nRespond with ONLY a tool call in this format:\n` +
+        '```json\n{"tool":"append_to_file","params":{"filePath":"' + rotationCheckpoint.filePath + '","content":"...code..."}}\n```';
       if (eogStructuralRetries <= 1) {
         nextUserMessage = `The file "${rotationCheckpoint.filePath}" is NOT complete (${lineCount} lines so far).${missingParts} ` +
-          `Continue writing the remaining content using append_to_file. Output ONLY code — no commentary, no preamble. ` +
+          `Continue writing the remaining content.${toolCallFormat}\n` +
           `The file currently ends with:\n${tailLines}\n\n` +
           `Continue IMMEDIATELY after this content. Do NOT restart. Do NOT repeat existing content.${rawSnippet}`;
       } else if (eogStructuralRetries === 2) {
         nextUserMessage = `IMPORTANT: The file "${rotationCheckpoint.filePath}" has ${lineCount} lines but is STILL missing critical sections:${missingParts}\n` +
           `You MUST close the current section NOW and move to the next structural section. ` +
-          `If you are inside a <style> block, close it with </style> immediately, then add </head> and start <body>. ` +
-          `Use append_to_file to add the remaining HTML structure, JavaScript, and closing tags. ` +
-          `Output ONLY code — no commentary.\nFile currently ends with:\n${tailLines}`;
+          `If you are inside a <style> block, close it with </style> immediately, then add </head> and start <body>.${toolCallFormat}\n` +
+          `File currently ends with:\n${tailLines}`;
       } else {
         nextUserMessage = `FINAL ATTEMPT: The file "${rotationCheckpoint.filePath}" is ${lineCount} lines of mostly CSS/styles.${missingParts}\n` +
           `You MUST append the body, scripts, and closing tags NOW. Start your append_to_file content with:\n` +
           `</style>\n</head>\n<body>\n  <!-- Add the main HTML structure here -->\n` +
-          `Then add all the interactive JavaScript in a <script> tag and close with </body></html>. ` +
-          `Use append_to_file. Output ONLY code.`;
+          `Then add all the interactive JavaScript in a <script> tag and close with </body></html>.${toolCallFormat}`;
       }
       continue;
     }

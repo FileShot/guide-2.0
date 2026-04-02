@@ -170,6 +170,44 @@ class ConversationSummarizer {
     this.completedSteps = [...first, ...compressed, ...last];
   }
 
+  /**
+   * Record a model response as plan text for context recovery.
+   * Called by cloud chat handler after each generation.
+   */
+  recordPlan(responseText) {
+    if (!responseText) return;
+    // Extract plan-like steps from the response
+    const lines = responseText.split('\n');
+    for (const line of lines) {
+      const stepMatch = line.match(/^\s*(?:\d+[\.\)]|[-*])\s+(.+)/);
+      if (stepMatch) {
+        this.taskPlan.push({ index: this.taskPlan.length + 1, description: stepMatch[1].slice(0, 200), completed: false });
+      }
+    }
+    // Cap plan size
+    if (this.taskPlan.length > 30) {
+      this.taskPlan = this.taskPlan.slice(-20);
+    }
+  }
+
+  /**
+   * Mark a plan step as completed based on tool execution.
+   * Called by cloud chat handler after tool results.
+   */
+  markPlanStepCompleted(toolName, params) {
+    // Mark the first uncompleted step as done (rough heuristic)
+    const pending = this.taskPlan.find(s => !s.completed);
+    if (pending) pending.completed = true;
+  }
+
+  /**
+   * Generate a full summary. Delegates to generateQuickSummary.
+   * Called by cloud chat handler during context rotation.
+   */
+  generateSummary(options) {
+    return this.generateQuickSummary(options?.activeTodos || []);
+  }
+
   markRotation() {
     this.rotationCount++;
     // Save current state for warm tier

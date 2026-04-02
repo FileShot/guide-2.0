@@ -4,6 +4,68 @@
 
 ---
 
+## 2026-04-03 — R47 Fixes (maxTokens override, continuation prompts, UI)
+
+### R47-Fix: Remove frontend maxTokens override (ROOT CAUSE FIX)
+- **File:** `pipeline/agenticLoop.js` line ~223
+- **Removed:** `maxTokens: Math.min(context?.params?.maxTokens || generationMaxTokens, generationMaxTokens)`
+- **Added:** `maxTokens: generationMaxTokens` (uses totalCtx, the full context window)
+- **Why:** Frontend default `maxResponseTokens: 2048` (appStore.js line 597) was overriding the agenticLoop's intended use of `totalCtx` (e.g., 24320). This caused the model to hit maxTokens after only ~2048 tokens per iteration, requiring 16+ continuations for a single file write. After many continuations, the model lost tool call format awareness and outputted raw code into the chat. This was the root cause of "naked CSS in chat" bug.
+
+### R47-Fix-B: File write maxTokens continuation path
+- **File:** `pipeline/agenticLoop.js` after line ~1787
+- **Added:** New block that fires when `allWriteTools && allSucceeded && stopReason !== 'natural' && !stuckDetected && rotationCheckpoint`. Reads the last 30 lines of the primary file and constructs a continuation message with explicit `\`\`\`json{"tool":"append_to_file",...}\`\`\`` format example.
+- **Why:** When a file write hits maxTokens (context full), the generic continuation message ("Continue with the task based on these results") gave no guidance on tool call format. The model would then output raw code. This new path provides file tail context and explicit format.
+
+### R47-Fix-C: Tool call format in R38-Fix-C retries
+- **File:** `pipeline/agenticLoop.js` line ~2210
+- **Added:** `toolCallFormat` variable with explicit JSON tool call format example, inserted into all 3 R38-Fix-C retry tiers (gentle, firm, urgent).
+- **Why:** When the model outputs unparseable responses, the retry messages now explicitly show the expected format, increasing recovery success.
+
+### R47-Fix-D: Tool call format in R16-Fix-B non-salvage path
+- **File:** `pipeline/agenticLoop.js` line ~1936
+- **Added:** `appendFormat` variable with explicit `\`\`\`json{"tool":"append_to_file",...}\`\`\`` format example using the primary file path. Appended to the "Review whether ALL content..." continuation message.
+- **Why:** Same rationale as R47-Fix-B — when the model needs to continue a file write after the non-salvage code path, it now gets explicit format guidance.
+
+### UI: Model label fix for cloud AI
+- **File:** `frontend/src/components/ChatPanel.jsx` line ~644 and ~224
+- **Changed:** Model label in streaming footer and message metadata now checks `store.cloudProvider` first; shows 'guIDE Cloud AI' for bundled provider or `store.cloudModel` for custom.
+- **Why:** After switching to cloud AI, the label still showed the local model name (e.g., "QWEN3.5-2B").
+
+### UI: GPU layers in footer
+- **File:** `llmEngine.js` — Added `totalLayers: gpuConfig.estimatedLayers || 32` to modelInfo
+- **File:** `frontend/src/components/StatusBar.jsx` — Added GPU layers display (X/Y layers format)
+- **Why:** User requested GPU layer count visible in the status bar.
+
+### UI: Expanded default enabled tools
+- **File:** `frontend/src/components/Sidebar.jsx`
+- **Changed:** `DEFAULT_ENABLED_TOOLS` expanded from 19 to ~40 tools
+- **Why:** User wanted more tools enabled by default for new sessions.
+
+### R47-Fix-E: Cloud handler crash — missing ConversationSummarizer methods
+- **File:** `pipeline/conversationSummarizer.js`
+- **Added:** Three methods that the cloud chat handler calls but did not exist: `recordPlan()`, `markPlanStepCompleted()`, `generateSummary()`
+- **Why:** Cloud handler at `agenticChat.js` line 369 calls `summarizer.recordPlan(responseText)`. ConversationSummarizer had no such method. This threw `TypeError: summarizer.recordPlan is not a function`, which crashed the cloud handler mid-response. The user saw a partial response ("How's it going?") that appeared to cut off, followed by the pipeline returning `{ success: false }`. This was the root cause of the "message cutoff" bug.
+- **Evidence:** Log at 02:23:34.393: `TypeError: summarizer.recordPlan is not a function`
+
+### R47-Fix-F: Switch default cloud provider from SambaNova to Cerebras
+- **File:** `frontend/src/components/ChatPanel.jsx` line 1798
+- **Removed:** `selectCloudModel('sambanova', 'Meta-Llama-3.3-70B-Instruct')`
+- **Added:** `selectCloudModel('cerebras', 'gpt-oss-120b')`
+- **File:** `cloudLLMService.js` line 260 — `FALLBACK_ORDER`
+- **Changed:** `['sambanova', 'cerebras', ...]` to `['cerebras', 'sambanova', ...]`
+- **File:** `agenticChat.js` — `selectCloudProvider()`
+- **Changed:** Cerebras now checked before Groq in auto-selection
+- **Why:** SambaNova was unreliable (returning 500 server errors). Cerebras has generous API limits and multiple pool keys.
+
+### R47-Fix-G: noFallback bypass for 5xx server errors
+- **File:** `cloudLLMService.js` — `generate()` method (line ~848) and `_attemptWithPoolRotation()`
+- **Changed:** When `noFallback=true` and the provider failure was a 5xx server error (not a 429 rate limit), the fallback chain is now still attempted. Added `_lastAttemptWasServerError` flag to track whether the failure was transient.
+- **Why:** When the user selected a specific provider and it returned HTTP 500, the system threw "Rate limited on all available providers" without trying any fallback providers — even though google, openrouter, groq, cerebras were all configured and available. The error message was also misleading (said "rate limited" when the actual error was a server error).
+- **Evidence:** Log at 02:23:46: SambaNova 500 → "Rate limited on all available providers" with 4 other providers never tried.
+
+---
+
 ## 2026-04-02 — v2.3.3
 
 ### CRITICAL FIX: Black screen in packaged app (v2.3.3)

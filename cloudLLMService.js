@@ -257,7 +257,7 @@ const VISION_MODELS = {
 };
 
 // ─── Fallback order + preferred fallback models ──────────────────────────────
-const FALLBACK_ORDER = ['sambanova', 'cerebras', 'google', 'nvidia', 'cohere', 'mistral',
+const FALLBACK_ORDER = ['cerebras', 'sambanova', 'google', 'nvidia', 'cohere', 'mistral',
   'huggingface', 'cloudflare', 'together', 'fireworks', 'openrouter', 'groq'];
 
 const PREFERRED_FALLBACK_MODEL = {
@@ -844,13 +844,17 @@ class CloudLLMService extends EventEmitter {
       if (result) return result;
     }
 
-    if (noFallback) {
+    // R47-Fix-E: Only respect noFallback for actual rate limits (429).
+    // For transient server errors (5xx), always try fallback chain — the user
+    // benefits from transparent failover rather than a misleading "Rate limited" error.
+    if (noFallback && !this._lastAttemptWasServerError) {
       throw new Error(`Rate limited on all available providers. Please wait a minute and try again.`);
     }
     return this._attemptFallbackChain(provider, model, systemPrompt, prompt, options, onToken, conversationHistory, onThinkingToken, images);
   }
 
   async _attemptWithPoolRotation(provider, model, systemPrompt, prompt, options, onToken, conversationHistory, onThinkingToken, images, noFallback) {
+    this._lastAttemptWasServerError = false; // R47-Fix-E: Track whether failure was 5xx
     const proactivePace = this.getProactivePaceMs(provider);
     if (proactivePace > 0) {
       console.log(`[CloudLLM] Proactive pacing: waiting ${proactivePace}ms before ${provider} request (RPM budget management)`);
@@ -899,6 +903,7 @@ class CloudLLMService extends EventEmitter {
         if (is403 || is5xx) {
           const cooldownMs = is403 ? 300000 : 60000;
           this._rateLimitedUntil[provider] = Date.now() + cooldownMs;
+          this._lastAttemptWasServerError = true; // R47-Fix-E: 5xx/403 should still try fallback
           console.log(`[CloudLLM] ${msg.substring(0, 80)} on ${provider}, cooldown ${cooldownMs / 1000}s, falling to fallback chain`);
           return null;
         }

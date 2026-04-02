@@ -1552,14 +1552,34 @@ const TOOL_CATEGORIES = {
   ],
 };
 
-// Tools enabled by default (the rest are disabled by default)
+// Tools enabled by default (most critical tools for productive AI assistance)
 const DEFAULT_ENABLED_TOOLS = new Set([
-  'read_file', 'write_file', 'edit_file', 'list_directory', 'find_files',
-  'get_project_structure', 'grep_search', 'search_codebase',
-  'run_command', 'web_search', 'fetch_webpage',
+  // File Operations
+  'read_file', 'write_file', 'edit_file', 'append_to_file', 'create_file',
+  'delete_file', 'rename_file', 'list_directory', 'find_files',
+  'get_project_structure', 'get_file_info', 'open_file_in_editor', 'diff_files',
+  // Search
+  'grep_search', 'search_in_file', 'search_codebase', 'replace_in_files',
+  // Terminal
+  'run_command', 'check_port', 'install_packages',
+  // Web
+  'web_search', 'fetch_webpage', 'http_request',
+  // Browser
   'browser_navigate', 'browser_snapshot', 'browser_click', 'browser_type',
+  'browser_fill_form', 'browser_evaluate', 'browser_scroll', 'browser_back',
+  'browser_screenshot', 'browser_get_content',
+  // Git
+  'git_status', 'git_commit', 'git_diff', 'git_log', 'git_branch',
+  // Code Analysis
+  'analyze_error',
+  // Undo
+  'undo_edit', 'list_undoable',
+  // Memory
+  'save_memory', 'get_memory', 'list_memories',
+  // Planning
   'write_todos', 'update_todo',
-  'save_memory', 'get_memory',
+  // Scratchpad
+  'write_scratchpad', 'read_scratchpad',
 ]);
 
 // Total tool count

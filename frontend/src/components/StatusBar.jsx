@@ -235,9 +235,12 @@ export default function StatusBar() {
 
         {/* GPU memory */}
         {gpuMemory && gpuMemory.memoryUsed !== undefined && (
-          <div className="statusbar-item" title={`GPU: ${gpuMemory.memoryUsed}MB / ${gpuMemory.memoryTotal}MB used${gpuMemory.name ? ` (${gpuMemory.name})` : ''}`}>
+          <div className="statusbar-item" title={`GPU: ${gpuMemory.memoryUsed}MB / ${gpuMemory.memoryTotal}MB used${gpuMemory.name ? ` (${gpuMemory.name})` : ''}${gpuMemory.gpuLayers ? ` | ${gpuMemory.gpuLayers}${modelInfo?.totalLayers ? '/' + modelInfo.totalLayers : ''} layers` : ''}`}>
             <HardDrive size={12} className="mr-1" />
             <span>{gpuMemory.memoryUsed}MB</span>
+            {gpuMemory.gpuLayers > 0 && (
+              <span className="ml-1 text-vsc-text-dim/70">{gpuMemory.gpuLayers}{modelInfo?.totalLayers ? '/' + modelInfo.totalLayers : ''} layers</span>
+            )}
           </div>
         )}
 

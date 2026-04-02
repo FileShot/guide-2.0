@@ -532,8 +532,8 @@ function selectCloudProvider(cloudLLM, message, context) {
     if (has('anthropic')) return pick('anthropic', 'claude-sonnet-4-20250514');
   }
 
+  if (has('cerebras')) return pick('cerebras', 'gpt-oss-120b');
   if (has('groq')) return pick('groq', 'llama-3.3-70b-versatile');
-  if (has('cerebras')) return pick('cerebras', 'zai-glm-4.7');
   if (has('google')) return pick('google', 'gemini-2.5-flash');
   if (has('anthropic')) return pick('anthropic', 'claude-sonnet-4-20250514');
   if (has('openai')) return pick('openai', 'gpt-4o');

@@ -502,6 +502,7 @@ class LLMEngine extends EventEmitter {
         size: modelStats.size,
         contextSize: this.context.contextSize || 0,
         gpuLayers: loadedModel.gpuLayers || 0,
+        totalLayers: gpuConfig.estimatedLayers || 32,
         family,
         paramSize,
         tier: getSizeTier(paramSize),

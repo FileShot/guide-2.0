@@ -221,7 +221,11 @@ function StreamingFooter() {
   return (
     <div className="chat-message assistant">
       <div className="text-vsc-xs text-vsc-text-dim mb-1 font-medium uppercase tracking-wider flex items-center gap-2">
-        {(modelInfo?.name || 'guIDE').split('/').pop().split('-Q')[0]}
+        {(() => {
+          const cp = useAppStore.getState().cloudProvider;
+          if (cp) return GUIDE_CLOUD_PROVIDERS.has(cp) ? 'guIDE Cloud AI' : cp.charAt(0).toUpperCase() + cp.slice(1);
+          return (modelInfo?.name || 'guIDE').split('/').pop().split('-Q')[0];
+        })()}
         {chatIteration && chatIteration.iteration > 1 && (
           <>
             <span className="text-vsc-text-dim/60 font-normal normal-case tracking-normal">—</span>
@@ -641,7 +645,10 @@ export default function ChatPanel() {
           toolCalls: hasToolCalls ? finalToolCalls : undefined,
           thinking: thinkingText || undefined,
           // R46-A: Store model name for display on finalized messages
-          model: useAppStore.getState().modelInfo?.name || undefined,
+          // R47-A: Use cloud model name when cloud provider is active
+          model: store.cloudProvider
+            ? (GUIDE_CLOUD_PROVIDERS.has(store.cloudProvider) ? 'guIDE Cloud AI' : store.cloudModel || store.cloudProvider)
+            : (useAppStore.getState().modelInfo?.name || undefined),
         });
       } else if (result && result.success === false && result.error) {
         // v2.2.10: Display backend error messages (e.g. "Provider not configured")
@@ -1786,7 +1793,7 @@ function ModelPickerDropdown({ onClose, models, currentModel }) {
                   className={`w-full text-left px-2 py-2 text-[11px] hover:bg-vsc-list-hover flex items-center gap-2 border-b border-vsc-panel-border/20 ${
                     GUIDE_CLOUD_PROVIDERS.has(cloudProvider) ? 'bg-vsc-list-active' : ''
                   }`}
-                  onClick={() => selectCloudModel('sambanova', 'Meta-Llama-3.3-70B-Instruct')}
+                  onClick={() => selectCloudModel('cerebras', 'gpt-oss-120b')}
                 >
                   <Sparkles size={12} className="text-vsc-accent flex-shrink-0" />
                   <div className="min-w-0 flex-1">
