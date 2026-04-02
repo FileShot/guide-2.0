@@ -230,8 +230,7 @@ for (const [provider, key] of Object.entries(savedKeys)) {
   }
 }
 
-// Restore license state
-licenseManager.loadLicense();
+// License state already restored in LicenseManager constructor
 
 // Initialize extensions (async, non-blocking)
 extensionManager.initialize().catch(err => console.error('[Main] Extension init error:', err.message));

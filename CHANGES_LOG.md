@@ -12,6 +12,13 @@
 - **Added:** `const { LicenseManager } = require('./licenseManager');`
 - **Why:** `licenseManager.js` exports `{ LicenseManager }` (named), but was imported as default. `new LicenseManager(...)` threw `TypeError: LicenseManager is not a constructor`, crashing the app at startup before any window appeared. Confirmed via crash log at `%APPDATA%/guide-ide/logs/guide-main.log`.
 
+### CRITICAL FIX: Remove nonexistent loadLicense() call (v2.3.2)
+- **File:** `electron-main.js` line 234
+- **Removed:** `licenseManager.loadLicense();`
+- **Added:** Comment: `// License state already restored in LicenseManager constructor`
+- **Why:** LicenseManager has no `loadLicense()` method — the constructor already restores state from settingsManager. The call threw `TypeError: licenseManager.loadLicense is not a function`.
+- **Verified:** All 16 other method calls on service instances confirmed to exist.
+
 ### GitHub Actions Build & Release
 - **Tag:** v2.3.0 pushed to GitHub, triggered Build & Release workflow (Run #15)
 - **Result:** All 5 build jobs completed successfully
