@@ -181,11 +181,13 @@ const rehypePlugins = [
 export default function MarkdownRenderer({ content, streaming }) {
   if (!content) return null;
 
-  // During streaming, auto-close unclosed code fences so partial code blocks render properly.
-  // Tracks actual fence boundaries: a fence opens/closes with 3+ backticks at line start,
-  // and the closing fence must have at least as many backticks as the opening.
+  // R48-Layer3: Auto-close unclosed code fences for ALL content, not just streaming.
+  // When the model stops mid-fence (timeout, context shift, or preserved by D5-Rewrite),
+  // the finalized message can have unclosed fences. Without auto-closing, ReactMarkdown
+  // renders the code block as raw text. This applies the same fence-tracking logic
+  // regardless of streaming state, ensuring the display never breaks from incomplete markdown.
   let displayContent = content;
-  if (streaming) {
+  {
     const lines = content.split('\n');
     let openFenceLen = 0; // length of the opening fence backticks (0 = not inside a fence)
     for (const line of lines) {

@@ -2141,10 +2141,16 @@ async function handleLocalChat(ctx, message, context, helpers) {
       fileCompletionCheckPending = false;
     }
 
-    // ── S7-9B + D5: Natural stop with unclosed code fence → force continuation ──
-    // If the model emitted eogToken but the accumulated response has an unclosed
-    // code block (odd fence parity), the file is incomplete. Force continuation
-    // so the model can complete and close the block. Safety-limited to 3 retries.
+    // ── S7-9B + D5-Rewrite: Unclosed code fence → force continuation ──────
+    // If the accumulated response has an unclosed code block (odd fence parity),
+    // the output is incomplete. Force continuation so the model can finish.
+    // Safety-limited to 3 retries.
+    //
+    // D5-Rewrite (R48-Layer2): The original D5 discarded ALL content from the
+    // current iteration, assuming unclosed fence = "confused output". This was
+    // wrong — 19K+ chars of valid content were being thrown away. The model was
+    // actively generating a file and simply ran out of tokens. Now we PRESERVE
+    // the content and only force continuation to close the fence.
     //
     // Skip this check if the previous iteration was a content-streamed file write.
     // Content-streamed fences go to the frontend but NOT to fullResponseText.
@@ -2152,24 +2158,22 @@ async function handleLocalChat(ctx, message, context, helpers) {
     if (!stream.wasContentStreamed()) {
       const fenceLines = (fullResponseText.match(/^```/gm) || []).length;
       if (fenceLines % 2 !== 0 && unclosedFenceRetries < 3) {
-        // D5: Remove the current iteration's text from accumulated response
         const currentIterText = rawText || '';
         const partialWriteFileMatch = currentIterText.match(/"tool"\s*:\s*"write_file"[\s\S]*?"(?:filePath|file_path|path|filename|file_name|file)"\s*:\s*"([^"]+)"/);
         const partialWriteFilePath = partialWriteFileMatch ? partialWriteFileMatch[1] : null;
 
-        if (currentIterText.length > 0 && fullResponseText.endsWith(currentIterText)) {
-          fullResponseText = fullResponseText.slice(0, -currentIterText.length);
-          displayResponseText = displayResponseText.slice(0, -((displayText || currentIterText).length));
-          console.log(`[AgenticLoop]   D5: Discarded ${currentIterText.length} chars of confused iteration output`);
-          if (partialWriteFilePath) console.log(`[AgenticLoop]   D5: Partial write_file detected for "${partialWriteFilePath}"`);
-          stream.replaceLast('');
-        }
-        console.log(`[AgenticLoop]   Natural stop with unclosed code fence (${fenceLines} fences) — forcing continuation (retry ${unclosedFenceRetries + 1}/3)`);
+        // D5-Rewrite: Do NOT discard content. The model's output is valid but
+        // incomplete. Keep it in fullResponseText and displayResponseText.
+        // The continuation will ask the model to finish from where it left off.
+        console.log(`[AgenticLoop]   Unclosed code fence (${fenceLines} fences, ${currentIterText.length} chars this iter) — forcing continuation (retry ${unclosedFenceRetries + 1}/3), content PRESERVED`);
+        if (partialWriteFilePath) console.log(`[AgenticLoop]   Partial write_file detected for "${partialWriteFilePath}"`);
         unclosedFenceRetries++;
         continuationCount++;
 
+        // Provide anchor context so the model knows where to resume
+        const lastChars = fullResponseText.slice(-400);
         if (partialWriteFilePath) {
-          nextUserMessage = `Your write_file call for "${partialWriteFilePath}" was cut off before finishing. The file is still incomplete. Use append_to_file to add the remaining content. Continue from where the data was cut off — do NOT use write_file again and do NOT restart the file.`;
+          nextUserMessage = `Your write_file call for "${partialWriteFilePath}" was cut off before finishing. The file is still incomplete. Use append_to_file to add the remaining content. Continue from where the data was cut off — do NOT use write_file again and do NOT restart the file.\nYour output ended with:\n${lastChars}`;
         } else {
           nextUserMessage = continuationMessage({ lastText: fullResponseText, midFence: true, taskGoal: message });
         }

@@ -4,6 +4,19 @@
 
 ---
 
+## 2026-04-03 — R48-Layer2: D5 Rewrite — Stop Discarding Valid Content
+- **File:** `pipeline/agenticLoop.js` lines ~2144-2185 (S7-9B + D5 block)
+- **Removed:** 3 destructive lines: `fullResponseText.slice(0, -currentIterText.length)`, `displayResponseText.slice(...)`, `stream.replaceLast('')`
+- **Kept:** Unclosed fence detection, continuation retry logic (3 max), partial write_file detection
+- **Added:** `fullResponseText.slice(-400)` anchor context in the continuation message for partial writes
+- **Why:** Original D5 discarded ALL content from the current iteration when code fences were unclosed, assuming "confused output". In the v2.3.5 test, 19,537 chars of valid HTML were thrown away. The model was actively generating a file and simply ran out of tokens — the content was valid, just incomplete. Now content is PRESERVED and the continuation retry gives the model anchor context to resume coherently.
+- **Evidence:** Two D5 discards in test log: 19,537 chars at 12:16:08 and 16,347 chars at 12:26:16.
+
+## 2026-04-03 — R48-Layer3: Unclosed Fence Rendering for All Content
+- **File:** `frontend/src/components/chat/MarkdownRenderer.jsx` lines ~186-209
+- **Changed:** Auto-close unclosed code fences for ALL content, not just during streaming. Previously guarded by `if (streaming)`, now applies unconditionally.
+- **Why:** With D5 rewrite preserving content, finalized messages can have unclosed fences. Without auto-closing, ReactMarkdown renders the code block content as raw text. This ensures the display never breaks from incomplete markdown regardless of how the message was finalized.
+
 ## 2026-04-03 — R48-Fix: allWriteTools ReferenceError (CRITICAL)
 - **File:** `pipeline/agenticLoop.js` lines ~1790-1795
 - **Moved:** `WRITE_TOOL_NAMES`, `allWriteTools`, `allSucceeded` declarations to BEFORE R47-Fix-B block (their first usage)
