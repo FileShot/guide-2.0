@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-04-02 — v2.3.3
+
+### CRITICAL FIX: Black screen in packaged app (v2.3.3)
+- **File:** `frontend/vite.config.js` line 4
+- **Added:** `base: './'` to Vite config
+- **Why:** Vite defaults to `base: '/'`, producing absolute asset paths (`/assets/index-xxx.js`) in `index.html`. When Electron loads the HTML via `file://` protocol with `loadFile()`, absolute paths resolve to filesystem root (`C:\assets\...`) instead of relative to the HTML file. All JS/CSS failed to load, causing a blank screen. Setting `base: './'` produces relative paths (`./assets/...`) that work under `file://`.
+- **Frontend rebuilt** — `dist/index.html` now has `./assets/...` paths
+
+---
+
 ## 2026-04-02 — v2.3.0 Deployment
 
 ### CRITICAL FIX: LicenseManager import crash (v2.3.1)
