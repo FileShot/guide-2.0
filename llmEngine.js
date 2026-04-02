@@ -468,7 +468,8 @@ class LLMEngine extends EventEmitter {
       // Session setup
       this.tokenPredictor = new InputLookupTokenPredictor();
       this.sequence = this.context.getSequence();
-      this.chat = new LlamaChat({ contextSequence: this.sequence });
+      const thinkWrapper = await this._buildThinkingChatWrapper();
+      this.chat = new LlamaChat({ contextSequence: this.sequence, ...(thinkWrapper ? { chatWrapper: thinkWrapper } : {}) });
 
       const sysPreamble = this._getActiveSystemPrompt();
       this.chatHistory = [{ type: 'system', text: sysPreamble }];
@@ -555,6 +556,35 @@ class LLMEngine extends EventEmitter {
       // Asar-packed fallback
       const asarPath = path.join(__dirname, '..', 'node_modules', 'node-llama-cpp', 'dist', 'index.js');
       return asarPath;
+    }
+  }
+
+  /**
+   * Build a JinjaTemplateChatWrapper with enable_thinking=true for thinking-variant models.
+   * Returns undefined if thinking is not enabled or the template is unavailable.
+   * Model-agnostic: models whose templates don't reference enable_thinking simply ignore it.
+   */
+  async _buildThinkingChatWrapper() {
+    if (!this.thoughtTokenBudget || this.thoughtTokenBudget <= 0) return undefined;
+    if (!this.model) return undefined;
+
+    const template = this.model.fileInfo?.metadata?.tokenizer?.chat_template;
+    if (!template) return undefined;
+
+    try {
+      const llamaCppPath = this._getNodeLlamaCppPath();
+      const { JinjaTemplateChatWrapper } = await import(pathToFileURL(llamaCppPath).href);
+      const wrapper = new JinjaTemplateChatWrapper({
+        template,
+        tokenizer: this.model.tokenizer,
+        additionalRenderParameters: { enable_thinking: true },
+      });
+      console.log(`[LLM] Built thinking chat wrapper (enable_thinking=true, budget=${this.thoughtTokenBudget})`);
+      return wrapper;
+    } catch (err) {
+      const log = require('./logger');
+      log.warn(`Failed to build thinking chat wrapper: ${err.message} — falling back to auto-resolved wrapper`);
+      return undefined;
     }
   }
 
@@ -981,7 +1011,8 @@ class LLMEngine extends EventEmitter {
       }
       const llamaCppPath = this._getNodeLlamaCppPath();
       const { LlamaChat } = await import(pathToFileURL(llamaCppPath).href);
-      this.chat = new LlamaChat({ contextSequence: this.sequence });
+      const thinkWrapper1 = await this._buildThinkingChatWrapper();
+      this.chat = new LlamaChat({ contextSequence: this.sequence, ...(thinkWrapper1 ? { chatWrapper: thinkWrapper1 } : {}) });
       this.lastEvaluation = null;
     }
 
@@ -1018,7 +1049,8 @@ class LLMEngine extends EventEmitter {
         }
         const llamaCppPath = this._getNodeLlamaCppPath();
         const { LlamaChat } = await import(pathToFileURL(llamaCppPath).href);
-        this.chat = new LlamaChat({ contextSequence: this.sequence });
+        const thinkWrapper2 = await this._buildThinkingChatWrapper();
+        this.chat = new LlamaChat({ contextSequence: this.sequence, ...(thinkWrapper2 ? { chatWrapper: thinkWrapper2 } : {}) });
       }
     }
 
@@ -1297,7 +1329,8 @@ class LLMEngine extends EventEmitter {
         }
         const llamaCppPath = this._getNodeLlamaCppPath();
         const { LlamaChat } = await import(pathToFileURL(llamaCppPath).href);
-        this.chat = new LlamaChat({ contextSequence: this.sequence });
+        const thinkWrapper3 = await this._buildThinkingChatWrapper();
+        this.chat = new LlamaChat({ contextSequence: this.sequence, ...(thinkWrapper3 ? { chatWrapper: thinkWrapper3 } : {}) });
         this.lastEvaluation = null;
       }
 
@@ -1309,7 +1342,8 @@ class LLMEngine extends EventEmitter {
         this.sequence = this.context.getSequence();
         const llamaCppPath = this._getNodeLlamaCppPath();
         const { LlamaChat } = await import(pathToFileURL(llamaCppPath).href);
-        this.chat = new LlamaChat({ contextSequence: this.sequence });
+        const thinkWrapper4 = await this._buildThinkingChatWrapper();
+        this.chat = new LlamaChat({ contextSequence: this.sequence, ...(thinkWrapper4 ? { chatWrapper: thinkWrapper4 } : {}) });
       }
 
       const thoughtBudget = this.thoughtTokenBudget;
@@ -1604,7 +1638,8 @@ class LLMEngine extends EventEmitter {
 
     const llamaCppPath = this._getNodeLlamaCppPath();
     const { LlamaChat } = await import(pathToFileURL(llamaCppPath).href);
-    this.chat = new LlamaChat({ contextSequence: this.sequence });
+    const thinkWrapper5 = await this._buildThinkingChatWrapper();
+    this.chat = new LlamaChat({ contextSequence: this.sequence, ...(thinkWrapper5 ? { chatWrapper: thinkWrapper5 } : {}) });
 
     const sysPreamble = useCompactPrompt ? this._getCompactSystemPrompt() : this._getActiveSystemPrompt();
     this.chatHistory = [{ type: 'system', text: sysPreamble }];

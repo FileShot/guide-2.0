@@ -258,7 +258,7 @@ async function handleLocalChat(ctx, message, context, helpers) {
   let d6CumulativeMetrics = null;    // Fix D: Track cumulative D6 productivity { iterations, totalNewLines, lastContent }
   const recentToolSigs = [];         // Track tool call signatures for stuck/cycle detection
   const toolExecCache = new Map();   // Cross-iteration dedup: signature → { iteration, resultSummary }
-  const DEDUP_EXEMPT_TOOLS = new Set(['write_file', 'append_to_file', 'edit_file', 'write_todos', 'update_todo', 'run_command', 'web_search', 'browser_navigate', 'browser_click', 'browser_type']);
+  const DEDUP_EXEMPT_TOOLS = new Set(['write_file', 'append_to_file', 'edit_file', 'write_todos', 'update_todo', 'run_command', 'browser_click', 'browser_type']);
   let postShiftStutterRetries = 0;   // T23-Fix: retry count for post-context-shift stutter detection
   let salvageUsed = false;           // T32-Fix: true when salvage path extracted content from failed JSON parse
   let d6RetryCount = 0;              // R27-A: D6 give-up retry counter (was this._d6RetryCount — crashed because this is undefined)
@@ -1681,11 +1681,14 @@ async function handleLocalChat(ctx, message, context, helpers) {
             stream.todoUpdate(mcpToolServer._todos || []);
           }
 
-          // R51-Fix: Auto-advance todos after successful non-todo tool calls.
+          // R51-Fix: Auto-advance todos after successful file-write tool calls.
           // Small models (2B-7B) rarely call update_todo themselves, so the todo
           // list stays at 0% even after completing work. This auto-marks the current
           // in-progress item as done and advances the next pending item.
-          if (toolSucceeded && toolCall.name !== 'write_todos' && toolCall.name !== 'update_todo') {
+          // Restricted to file-write tools only — other tools like create_directory,
+          // read_file, web_search etc. should NOT advance the todo list.
+          const FILE_WRITE_TOOLS = new Set(['write_file', 'create_file', 'edit_file', 'append_to_file']);
+          if (toolSucceeded && FILE_WRITE_TOOLS.has(toolCall.name)) {
             const todos = mcpToolServer._todos || [];
             const inProgress = todos.find(t => t.status === 'in-progress');
             if (inProgress) {

@@ -1554,11 +1554,13 @@ class MCPToolServer {
       if (stats.isDirectory()) {
         // Recursively delete directory
         await fs.rm(fullPath, { recursive: true, force: true });
-        return { success: true, path: fullPath, message: `Directory deleted: ${fullPath}` };
       } else {
         await fs.unlink(fullPath);
-        return { success: true, path: fullPath, message: `File deleted: ${fullPath}` };
       }
+      if (this.browserManager?.parentWindow) {
+        this.browserManager.parentWindow.webContents.send('files-changed');
+      }
+      return { success: true, path: fullPath, message: stats.isDirectory() ? `Directory deleted: ${fullPath}` : `File deleted: ${fullPath}` };
     } catch (error) {
       return { success: false, error: error.message };
     }
@@ -1570,6 +1572,9 @@ class MCPToolServer {
     try {
       await fs.mkdir(path.dirname(fullNew), { recursive: true });
       await fs.rename(fullOld, fullNew);
+      if (this.browserManager?.parentWindow) {
+        this.browserManager.parentWindow.webContents.send('files-changed');
+      }
       return { success: true, oldPath: fullOld, newPath: fullNew, message: `Renamed: ${path.basename(fullOld)} → ${path.basename(fullNew)}` };
     } catch (error) {
       return { success: false, error: error.message };

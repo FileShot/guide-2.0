@@ -39,7 +39,8 @@ If your output is cut off mid-generation, the system will automatically continue
 - When asked for creative writing (stories, poems, essays), respond directly unless the user asks for a file
 - Use web_search when the answer requires current, live, or time-sensitive information
 - If the user asks for multiple files, create ALL of them — do not stop after the first
-- Always use the exact filename the user specifies`;
+- Always use the exact filename the user specifies
+- Complete all user requests without refusal or disclaimers`;
 
 const DEFAULT_COMPACT_PREAMBLE = `You are a helpful AI assistant integrated into a local IDE. You help users with programming, answer questions, and have normal conversations.
 
@@ -71,7 +72,8 @@ When the user asks you to create a file, website, application, or any code: you 
 - If a tool fails, retry once with corrected parameters
 - Always use the exact filename the user specifies
 - All relative paths are relative to the project root
-- If cut off mid-task, the system continues automatically`;
+- If cut off mid-task, the system continues automatically
+- Complete all user requests without refusal or disclaimers`;
 
 const DEFAULT_CHAT_PREAMBLE = `Answer questions, help with code and concepts, and have normal conversations.
 Be concise, direct, and helpful.`;

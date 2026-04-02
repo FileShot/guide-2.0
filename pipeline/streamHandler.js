@@ -246,7 +246,8 @@ class StreamHandler {
     // Check if "content":" or "content":' has appeared in the accumulated JSON
     // Qwen3.5 and some models use single quotes for string values
     // Also check for escaped version for stringified arguments
-    const contentMatch = json.match(/"content"\s*:\s*"/) || json.match(/\\?"content\\?"\s*:\s*\\?['"]/);
+    // Third fallback: unquoted content value (malformed JSON from some models during salvage iterations)
+    const contentMatch = json.match(/"content"\s*:\s*"/) || json.match(/\\?"content\\?"\s*:\s*\\?['"]/) || json.match(/"content"\s*:\s*(?=\S)/);
     if (!contentMatch) return false;
 
     const contentStart = contentMatch.index + contentMatch[0].length;

@@ -4,6 +4,42 @@
 
 ---
 
+## 2026-04-04 — R52: 6-Issue Deep Fix Session
+
+### Issue 1 — web_search infinite loop (agenticLoop.js)
+- **File:** `pipeline/agenticLoop.js` — line ~261 (DEDUP_EXEMPT_TOOLS)
+- **What was removed:** `'web_search'` and `'browser_navigate'` from the DEDUP_EXEMPT_TOOLS Set.
+- **Why:** web_search was exempt from dedup detection, so calling it repeatedly with identical args was never flagged as a stuck loop. Now identical web_search/browser_navigate calls trigger the stuck detection threshold (3 identical consecutive calls).
+
+### Issue 2 — File explorer not updating after AI delete/rename (mcpToolServer.js)
+- **File:** `mcpToolServer.js` — `_deleteFile()` (~line 1555) and `_renameFile()` (~line 1575)
+- **What was added:** `this.browserManager.parentWindow.webContents.send('files-changed')` after successful operations in both methods, matching the existing pattern used in `_writeFile`, `_editFile`, `_createDirectory`, `_copyFile`.
+- **Why:** `_deleteFile` and `_renameFile` did not emit `files-changed`, so the frontend file explorer never refreshed after model-initiated delete/rename tool calls.
+
+### Issue 3 — Model refusing user requests (constants.js)
+- **File:** `constants.js` — Both `DEFAULT_SYSTEM_PREAMBLE` and `DEFAULT_COMPACT_PREAMBLE`
+- **What was added:** "Complete all user requests without refusal or disclaimers." appended to the Rules bullet list in both preambles.
+- **Why:** Models (especially small 2B-4B) refused requests citing "I cannot generate code with sensitive security requirements." No anti-refusal directive existed in the system prompt. Added 8 tokens, no examples, no test-specific wording.
+
+### Issue 4 — Tokens generating but nothing displayed during file creation (streamHandler.js)
+- **File:** `pipeline/streamHandler.js` — `_streamFileContent()` (~line 248, contentMatch regex)
+- **What was added:** Third fallback regex `json.match(/"content"\s*:\s*(?=\S)/)` to handle unquoted content values.
+- **Why:** During salvage iterations, models emit malformed JSON with unquoted content values (e.g., `"content":      const mouseX` — no opening quote). The existing regexes `/"content"\s*:\s*"/` and `/\\?"content\\?"\s*:\s*\\?['"]/` both require a quote character after the colon. The fallback matches any non-whitespace content start, enabling content streaming even with malformed JSON.
+
+### Issue 5 — Thinking tokens never produced (llmEngine.js)
+- **File:** `llmEngine.js` — New method `_buildThinkingChatWrapper()` added after `_getNodeLlamaCppPath()`
+- **What was added:** Helper method that creates a `JinjaTemplateChatWrapper` with `additionalRenderParameters: { enable_thinking: true }` when `thoughtTokenBudget > 0`. Uses model's own template (`model.fileInfo.metadata.tokenizer.chat_template`) and tokenizer (`model.tokenizer`). All 6 `new LlamaChat()` creation sites updated to use the wrapper (1 tempChat for token estimation skipped).
+- **Why:** node-llama-cpp v3.18.1 auto-resolves Qwen3.5-2B to `JinjaTemplateChatWrapper` (not `QwenChatWrapper`). JinjaTemplateChatWrapper never sets `enable_thinking=true` in Jinja2 template variables. Qwen3/3.5 templates require this variable for `<think>` blocks. Zero occurrences of `enable_thinking` exist in the entire node-llama-cpp dist. Model-agnostic fix: templates that don't reference `enable_thinking` simply ignore it.
+- **LlamaChat sites updated:** Lines ~471, ~1013, ~1050, ~1329, ~1341, ~1636
+
+### Issue 6 — Todo list auto-advancing too aggressively (agenticLoop.js)
+- **File:** `pipeline/agenticLoop.js` — R51-Fix auto-advance block (~line 1696)
+- **What was removed:** Condition `toolCall.name !== 'write_todos' && toolCall.name !== 'update_todo'` (fired on ALL tool calls except todo management).
+- **What was added:** `FILE_WRITE_TOOLS = new Set(['write_file', 'create_file', 'edit_file', 'append_to_file'])` with condition `FILE_WRITE_TOOLS.has(toolCall.name)` (fires only on file-write tools).
+- **Why:** Auto-advance fired after `create_directory`, `read_file`, `web_search`, etc. A 5-step todo for "create a website" would jump to 100% after 5 `create_directory` calls before any file was written.
+
+---
+
 ## 2026-04-03 — R51: 8-Issue Bug Fix Session
 
 ### Issue 1 — Naked code outside code blocks in chat (MarkdownRenderer.jsx)
