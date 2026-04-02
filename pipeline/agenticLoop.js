@@ -1786,6 +1786,15 @@ async function handleLocalChat(ctx, message, context, helpers) {
       // If stuck detected, also clear the recent sigs so detection resets
       if (stuckDetected) recentToolSigs.length = 0;
 
+      // R48-Fix: Move WRITE_TOOL_NAMES, allWriteTools, allSucceeded before their
+      // first usage (R47-Fix-B). Previously allWriteTools was declared at line 1815
+      // with const but referenced at line 1794, causing ReferenceError that crashed
+      // the pipeline after EVERY tool execution.
+      const WRITE_TOOL_NAMES = new Set(['write_file', 'create_file', 'append_to_file']);
+      const allWriteTools = toolResultEntries.length > 0 &&
+        toolResultEntries.every(tr => WRITE_TOOL_NAMES.has(tr.tool));
+      const allSucceeded = toolResultEntries.every(tr => tr.result?.success !== false && !tr.result?.error);
+
       // R47-Fix-B: When all tool calls were file writes but generation was truncated
       // (maxTokens), the generic "Continue with the task" message doesn't remind the
       // model to use tool calls. This causes the model to output raw code without
@@ -1811,10 +1820,7 @@ async function handleLocalChat(ctx, message, context, helpers) {
       // T32-Fix: EXCEPTION — when salvageUsed is true, the content was extracted
       // from a FAILED JSON parse, meaning the tool call was never properly closed.
       // The file is by definition incomplete. Inject continuation instead of completion.
-      const WRITE_TOOL_NAMES = new Set(['write_file', 'create_file', 'append_to_file']);
-      const allWriteTools = toolResultEntries.length > 0 &&
-        toolResultEntries.every(tr => WRITE_TOOL_NAMES.has(tr.tool));
-      const allSucceeded = toolResultEntries.every(tr => tr.result?.success !== false && !tr.result?.error);
+      // R48-Fix: WRITE_TOOL_NAMES, allWriteTools, allSucceeded moved earlier (before R47-Fix-B).
       if (allWriteTools && allSucceeded && result.stopReason === 'natural' && !stuckDetected) {
         if (salvageUsed) {
           // T32-Fix: Salvage was used — JSON wrapper was malformed/truncated.

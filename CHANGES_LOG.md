@@ -4,6 +4,21 @@
 
 ---
 
+## 2026-04-03 — R48-Fix: allWriteTools ReferenceError (CRITICAL)
+- **File:** `pipeline/agenticLoop.js` lines ~1790-1795
+- **Moved:** `WRITE_TOOL_NAMES`, `allWriteTools`, `allSucceeded` declarations to BEFORE R47-Fix-B block (their first usage)
+- **Previously:** These `const` declarations were at line ~1815 but referenced at line ~1794 (R47-Fix-B). JavaScript temporal dead zone caused `ReferenceError: Cannot access 'allWriteTools' before initialization`.
+- **Impact:** Pipeline crashed after EVERY tool execution (web_search, write_file, append_to_file). Model never received tool results, fabricated responses instead. "Generating write_file" showed empty because pipeline died before content was displayed.
+- **Evidence:** 3+ occurrences in logs at exact same stack trace.
+
+## 2026-04-03 — R48-Fix-G: Chat Auto-Scroll During Streaming
+- **File:** `frontend/src/components/ChatPanel.jsx` line ~474
+- **Changed:** `scrollToIndex({ index: 'LAST', behavior: 'smooth' })` to `scrollTo({ top: Number.MAX_SAFE_INTEGER })`
+- **Why:** `scrollToIndex({ index: 'LAST' })` scrolls to the last DATA item in the Virtuoso list. But streaming content renders in the Virtuoso **Footer** (below data items). As the Footer grows during streaming, the old call didn't account for its height. `scrollTo({ top: MAX })` scrolls to the absolute bottom of the scroll container including Footer.
+- **Also added:** `atBottomThreshold={150}` to the Virtuoso component for more tolerant bottom detection (prevents losing auto-scroll from minor scroll position mismatch).
+
+---
+
 ## 2026-04-03 — R48 Visual Features and Carbon Theme
 
 ### R48-A: Carbon Theme

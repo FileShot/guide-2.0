@@ -471,10 +471,13 @@ export default function ChatPanel() {
   // Reset file context dismissal when active tab changes
   useEffect(() => { setFileContextDismissed(false); }, [activeTabId]);
 
-  // R39-A2: Auto-scroll during streaming — Footer content changes don't trigger Virtuoso followOutput
+  // R39-A2 + R48-Fix-G: Auto-scroll during streaming.
+  // scrollToIndex({ index: 'LAST' }) only scrolls to the last DATA item, but streaming
+  // content renders in the Virtuoso Footer (below data). Use scrollTo with max top value
+  // to scroll to the absolute bottom of the scroll container including Footer.
   useEffect(() => {
     if (chatStreaming && atBottomRef.current && virtuosoRef.current) {
-      virtuosoRef.current.scrollToIndex({ index: 'LAST', behavior: 'smooth' });
+      virtuosoRef.current.scrollTo({ top: Number.MAX_SAFE_INTEGER });
     }
   }, [chatStreaming, chatStreamingText, streamingSegments, streamingToolCalls]);
 
@@ -796,6 +799,7 @@ export default function ChatPanel() {
           data={chatMessages}
           followOutput="smooth"
           atBottomStateChange={(atBottom) => { atBottomRef.current = atBottom; }}
+          atBottomThreshold={150}
           initialTopMostItemIndex={chatMessages.length > 0 ? chatMessages.length - 1 : 0}
           className="scrollbar-thin"
           components={{
