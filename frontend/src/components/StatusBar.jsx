@@ -10,6 +10,7 @@ export default function StatusBar() {
   const modelInfo = useAppStore(s => s.modelInfo);
   const modelLoaded = useAppStore(s => s.modelLoaded);
   const modelLoading = useAppStore(s => s.modelLoading);
+  const modelLoadProgress = useAppStore(s => s.modelLoadProgress);
   const chatContextUsage = useAppStore(s => s.chatContextUsage);
   const activeTabId = useAppStore(s => s.activeTabId);
   const openTabs = useAppStore(s => s.openTabs);
@@ -276,17 +277,33 @@ export default function StatusBar() {
           <span>{liveServerRunning ? 'Go Live' : 'Go Live'}</span>
         </button>
 
-        {/* Model info */}
-        <button className="statusbar-item" onClick={() => setActiveActivity('settings')} title={modelInfo ? `${modelInfo.name} (${modelInfo.contextSize} ctx)` : 'No model'}>
-          <Cpu size={12} className="mr-1" />
-          {modelLoading ? (
-            <span>Loading...</span>
-          ) : modelLoaded && modelInfo ? (
-            <span className="truncate max-w-[120px]">{modelInfo.family || modelInfo.name}</span>
-          ) : (
-            <span className="opacity-70">No Model</span>
-          )}
-        </button>
+        {/* Model info / Loading progress */}
+        {modelLoading ? (
+          <div className="statusbar-item gap-2" title={`Loading model... ${modelLoadProgress}%`}>
+            <Cpu size={12} className="animate-pulse" />
+            <div className="flex items-center gap-1.5">
+              <div className="w-24 h-1.5 bg-vsc-panel-border rounded-full overflow-hidden">
+                <div
+                  className="h-full rounded-full transition-all duration-300"
+                  style={{
+                    width: `${modelLoadProgress}%`,
+                    background: 'linear-gradient(90deg, rgb(var(--guide-accent)), rgb(var(--guide-accent-hover)))',
+                  }}
+                />
+              </div>
+              <span className="text-[10px] tabular-nums">{Math.round(modelLoadProgress)}%</span>
+            </div>
+          </div>
+        ) : (
+          <button className="statusbar-item" onClick={() => setActiveActivity('settings')} title={modelInfo ? `${modelInfo.name} (${modelInfo.contextSize} ctx)` : 'No model'}>
+            <Cpu size={12} className="mr-1" />
+            {modelLoaded && modelInfo ? (
+              <span className="truncate max-w-[120px]">{modelInfo.family || modelInfo.name}</span>
+            ) : (
+              <span className="opacity-70">No Model</span>
+            )}
+          </button>
+        )}
       </div>
     </div>
   );

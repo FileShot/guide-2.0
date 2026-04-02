@@ -4,6 +4,24 @@
 
 ---
 
+## 2026-04-03 — R49-A: Model Loading Progress Bar in StatusBar
+- **File:** `frontend/src/components/StatusBar.jsx` lines ~287-302
+- **Added:** `modelLoadProgress` store subscription. Replaced simple "Loading..." text in model info section with inline progress bar showing animated gradient fill + percentage.
+- **File:** `frontend/src/components/Layout.jsx` lines ~127-147
+- **Removed:** Floating model loading overlay (the centered bottom card with spinner + progress bar + backdrop blur).
+- **Removed:** `modelLoading` and `modelLoadProgress` store subscriptions from Layout (no longer needed).
+- **Why:** User requested progress in the footer/status bar instead of a floating overlay. Now matches VS Code pattern — model loading state is always visible in the status bar without obstructing the workspace.
+
+## 2026-04-03 — R49-B: Window Resize Fix
+- **File:** `frontend/src/components/Layout.jsx` root div (line ~42)
+- **Changed:** Root div from `style={{ transform: scale(zoomLevel), width: 100/zoom vw, height: 100/zoom vh }}` (always applied) to `className="w-full h-full"` as default, with transform/percentage-based sizing only applied when `zoomLevel !== 1`.
+- **Why:** `transform: scale(1)` creates a new containing block even though it's visually a no-op. This can interfere with flexbox relayout during window resize. Also changed from `vw/vh` to `%` units to avoid scrollbar-width discrepancies on Windows.
+- **Changed:** Sidebar div from `flex-shrink-0` with fixed width to allowing flex-shrink with `minWidth: 180`.
+- **Changed:** Chat panel div from `flex-shrink-0` with fixed width to allowing flex-shrink with `minWidth: 280`.
+- **Why:** With `flex-shrink-0`, sidebar and chat panel refuse to shrink when window gets smaller. Content overflows the flex container and gets clipped by `overflow: hidden`. When window is enlarged again, elements may not reflow properly. Now panels can shrink to their minimum widths, preventing overflow/clipping.
+
+---
+
 ## 2026-04-03 — R48-Layer2: D5 Rewrite — Stop Discarding Valid Content
 - **File:** `pipeline/agenticLoop.js` lines ~2144-2185 (S7-9B + D5 block)
 - **Removed:** 3 destructive lines: `fullResponseText.slice(0, -currentIterText.length)`, `displayResponseText.slice(...)`, `stream.replaceLast('')`

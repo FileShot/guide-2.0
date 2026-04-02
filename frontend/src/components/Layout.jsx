@@ -36,19 +36,17 @@ export default function Layout() {
   const chatPanelVisible = useAppStore(s => s.chatPanelVisible);
   const chatPanelWidth = useAppStore(s => s.chatPanelWidth);
   const commandPaletteOpen = useAppStore(s => s.commandPaletteOpen);
-  const modelLoading = useAppStore(s => s.modelLoading);
-  const modelLoadProgress = useAppStore(s => s.modelLoadProgress);
   const zoomLevel = useAppStore(s => s.zoomLevel);
 
   return (
     <div
-      className="flex flex-col overflow-hidden bg-vsc-bg"
-      style={{
+      className="flex flex-col overflow-hidden bg-vsc-bg w-full h-full"
+      style={zoomLevel !== 1 ? {
         transform: `scale(${zoomLevel})`,
         transformOrigin: 'top left',
-        width: `${100 / zoomLevel}vw`,
-        height: `${100 / zoomLevel}vh`,
-      }}
+        width: `${100 / zoomLevel}%`,
+        height: `${100 / zoomLevel}%`,
+      } : undefined}
     >
       {/* Title Bar */}
       <TitleBar />
@@ -61,7 +59,7 @@ export default function Layout() {
         {/* Sidebar */}
         {sidebarVisible && (
           <>
-            <div style={{ width: sidebarWidth }} className="flex-shrink-0 bg-vsc-sidebar overflow-hidden">
+            <div style={{ width: sidebarWidth, minWidth: 180 }} className="bg-vsc-sidebar overflow-hidden">
               <Sidebar />
             </div>
             <div
@@ -102,7 +100,7 @@ export default function Layout() {
               onMouseDown={(e) => _startResize(e, 'chat')}
               onDoubleClick={() => useAppStore.getState().toggleChatPanel()}
             />
-            <div style={{ width: chatPanelWidth }} className="flex-shrink-0 bg-vsc-sidebar overflow-hidden border-l border-vsc-panel-border">
+            <div style={{ width: chatPanelWidth, minWidth: 280 }} className="bg-vsc-sidebar overflow-hidden border-l border-vsc-panel-border">
               <ChatPanel />
             </div>
           </>
@@ -115,34 +113,6 @@ export default function Layout() {
       {/* Overlays */}
       {commandPaletteOpen && <CommandPalette />}
       <Notifications />
-
-      {/* Model Loading Overlay */}
-      {modelLoading && (
-        <div className="fixed bottom-12 left-1/2 -translate-x-1/2 z-50 border border-vsc-panel-border rounded-xl px-5 py-3.5 flex items-center gap-3"
-          style={{
-            background: 'rgb(var(--guide-sidebar) / 0.9)',
-            backdropFilter: 'blur(16px)',
-            WebkitBackdropFilter: 'blur(16px)',
-            boxShadow: '0 20px 40px -12px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.05)',
-          }}
-        >
-          <div className="spinner" />
-          <div>
-            <div className="text-vsc-sm text-vsc-text-bright font-medium">Loading Model...</div>
-            {modelLoadProgress > 0 && (
-              <div className="mt-1.5 w-44 h-1.5 bg-vsc-panel-border rounded-full overflow-hidden">
-                <div
-                  className="h-full rounded-full transition-all duration-300"
-                  style={{
-                    width: `${modelLoadProgress}%`,
-                    background: `linear-gradient(90deg, rgb(var(--guide-accent)), rgb(var(--guide-accent-hover)))`,
-                  }}
-                />
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
