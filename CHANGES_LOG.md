@@ -4,6 +4,50 @@
 
 ---
 
+## 2026-04-03 — R48 Visual Features and Carbon Theme
+
+### R48-A: Carbon Theme
+- **File:** `frontend/src/components/ThemeProvider.jsx` — added after `void` theme definition
+- **Added:** New `carbon` theme — like Void but slightly lighter with visible chrome separation. bg: `8 8 10`, sidebar: `14 14 16`, titlebar/statusbar: `18 18 20`, panel-border: `40 40 44`, accent: white.
+- **Why:** User requested a near-Void dark theme with slightly lighter borders/titlebar/sidebar/footer for better visual separation.
+- **Default not changed** — Monolith remains the default per user request.
+
+### R48-B: Agent/Plan/Ask Mode Switching
+- **File:** `frontend/src/components/ChatPanel.jsx`
+- **Removed:** Single `planMode` boolean toggle button
+- **Added:** `chatMode` state with 3-mode segmented control: Agent (with Bot icon), Plan (with FileCode icon), Ask (with MessageSquare icon)
+- **Changed:** Params now send `chatMode`, `planMode: chatMode === 'plan'`, `askOnly: chatMode === 'ask'` for backward compat
+- **Visual:** Each mode has distinct color when active (Agent=accent, Plan=purple, Ask=blue). Modes appear as a rounded pill-group in the toolbar.
+- **Added imports:** `Bot`, `MessageSquare` from lucide-react
+- **Why:** VS Code has Agent/Edit/Ask modes. We only had Plan toggle. Now users can switch between autonomous agent, planning-first, and question-only modes.
+
+### R48-C: Dirty Diff Gutter Decorations
+- **File:** `frontend/src/components/EditorArea.jsx`
+- **Added:** `computeDirtyDiff()` helper — compares original vs current content line-by-line, produces Monaco decoration descriptors
+- **Added:** `dirtyDecorationsRef` — ref to Monaco decorations collection
+- **Added:** `useEffect` that recomputes decorations when `activeTab.content`, `activeTab.originalContent`, or `activeTab.modified` changes
+- **When modified:** Green gutter bars for added lines, blue for modified, red for deleted. When not modified, decorations are cleared.
+- **File:** `frontend/src/index.css` — added `.dirty-diff-added` (green), `.dirty-diff-modified` (blue), `.dirty-diff-deleted` (red) CSS classes in `@layer components`. Width 3px, positioned in Monaco's lines decorations margin.
+- **Why:** VS Code shows green/red/blue gutter indicators for modified lines. This is a fundamental visual feature for tracking file changes.
+
+### R48-D: Previous/Next Change Navigation
+- **File:** `frontend/src/components/EditorArea.jsx` — added in breadcrumb bar (after path, before Preview/Format buttons)
+- **Added:** Two small ChevronUp/ChevronDown buttons visible only when `activeTab.modified` is true
+- **Behavior:** Click Previous to jump to the last decorated (dirty diff) line before cursor. Click Next to jump to the first after cursor. Both wrap around.
+- **Uses:** `dirtyDecorationsRef.current.getRanges()` to find decoration positions, `editor.revealLineInCenter()` + `editor.setPosition()` to navigate.
+- **Added imports:** `ChevronUp`, `ChevronDown`, `Check`, `Undo2`, `Columns` from lucide-react
+- **Why:** VS Code has Previous/Next Change buttons. Enables quick navigation between edits in a file.
+
+### R48-E: AI Edit Bar Above Viewport
+- **File:** `frontend/src/components/EditorArea.jsx` — added between breadcrumb and Monaco editor
+- **Added:** Conditional bar that renders when `chatFilesChanged` contains an entry matching `activeTab.path`
+- **Shows:** Edit count, +/- line stats (green/red), View Diff button (opens DiffViewer), Keep button (removes from changed list), Undo button (restores originalContent + removes from list)
+- **Added store subscriptions:** `chatFilesChanged`, `setChatFilesChanged`, `openDiff`
+- **Visual:** Subtle accent-tinted background (`bg-vsc-accent/5`) with accent border. Buttons use same styling as the existing chat panel files-changed banner.
+- **Why:** When AI edits a file, users need persistent Keep/Undo controls directly in the editor viewport, not just in the chat input area.
+
+---
+
 ## 2026-04-03 — R47 Fixes (maxTokens override, continuation prompts, UI)
 
 ### R47-Fix: Remove frontend maxTokens override (ROOT CAUSE FIX)

@@ -16,8 +16,40 @@ import FileIcon from './FileIcon';
 import {
   X, Circle, FolderOpen, MessageSquare, Settings,
   FileText, Copy,
-  Eye, Code2, Play, ExternalLink, Globe, Wand2
+  Eye, Code2, Play, ExternalLink, Globe, Wand2,
+  ChevronUp, ChevronDown, Check, Undo2, Columns
 } from 'lucide-react';
+
+// ── Dirty diff helper — compute line-level changes ──
+function computeDirtyDiff(original, current) {
+  const origLines = (original || '').split('\n');
+  const currLines = (current || '').split('\n');
+  const decorations = [];
+  const maxLen = Math.max(origLines.length, currLines.length);
+  for (let i = 0; i < currLines.length; i++) {
+    if (i >= origLines.length) {
+      // Added line
+      decorations.push({
+        range: { startLineNumber: i + 1, startColumn: 1, endLineNumber: i + 1, endColumn: 1 },
+        options: { isWholeLine: true, linesDecorationsClassName: 'dirty-diff-added' },
+      });
+    } else if (origLines[i] !== currLines[i]) {
+      // Modified line
+      decorations.push({
+        range: { startLineNumber: i + 1, startColumn: 1, endLineNumber: i + 1, endColumn: 1 },
+        options: { isWholeLine: true, linesDecorationsClassName: 'dirty-diff-modified' },
+      });
+    }
+  }
+  // Deleted lines at end — mark the last current line
+  if (origLines.length > currLines.length && currLines.length > 0) {
+    decorations.push({
+      range: { startLineNumber: currLines.length, startColumn: 1, endLineNumber: currLines.length, endColumn: 1 },
+      options: { isWholeLine: true, linesDecorationsClassName: 'dirty-diff-deleted' },
+    });
+  }
+  return decorations;
+}
 
 export default function EditorArea() {
   const openTabs = useAppStore(s => s.openTabs);
@@ -33,10 +65,14 @@ export default function EditorArea() {
   const editorIndentSize = useAppStore(s => s.editorIndentSize);
   const editorIndentType = useAppStore(s => s.editorIndentType);
   const diffState = useAppStore(s => s.diffState);
+  const chatFilesChanged = useAppStore(s => s.chatFilesChanged);
+  const setChatFilesChanged = useAppStore(s => s.setChatFilesChanged);
+  const openDiff = useAppStore(s => s.openDiff);
   const [tabContextMenu, setTabContextMenu] = useState(null);
   const [inlineChat, setInlineChat] = useState(null);
   const [previewMode, setPreviewMode] = useState({}); // { [tabId]: boolean }
   const editorRef = useRef(null);
+  const dirtyDecorationsRef = useRef(null);
   const previewRequested = useAppStore(s => s.previewRequested);
 
   // R46-B: When Sidebar play button opens a file and sets previewRequested,
@@ -76,6 +112,26 @@ export default function EditorArea() {
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
   }, []);
+
+  // Dirty diff — update gutter decorations when content changes
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor || !activeTab) return;
+    if (activeTab.modified) {
+      const decos = computeDirtyDiff(activeTab.originalContent, activeTab.content);
+      if (dirtyDecorationsRef.current) {
+        dirtyDecorationsRef.current.set(decos);
+      } else {
+        dirtyDecorationsRef.current = editor.createDecorationsCollection(decos);
+      }
+    } else {
+      // File not modified — clear decorations
+      if (dirtyDecorationsRef.current) {
+        dirtyDecorationsRef.current.clear();
+        dirtyDecorationsRef.current = null;
+      }
+    }
+  }, [activeTab?.content, activeTab?.originalContent, activeTab?.modified]);
 
   const handleTabContextMenu = (e, tabId) => {
     e.preventDefault();
@@ -193,6 +249,56 @@ export default function EditorArea() {
             </span>
           ))}
           </div>
+          {/* Previous/Next change navigation */}
+          {activeTab.modified && (
+            <div className="flex items-center gap-px ml-1">
+              <button
+                className="p-0.5 rounded text-vsc-text-dim hover:text-vsc-text hover:bg-vsc-list-hover transition-colors"
+                title="Previous Change"
+                onClick={() => {
+                  const editor = editorRef.current;
+                  const decos = dirtyDecorationsRef.current;
+                  if (!editor || !decos) return;
+                  const ranges = decos.getRanges();
+                  if (!ranges.length) return;
+                  const curLine = editor.getPosition()?.lineNumber || 1;
+                  // Find the last decoration line before cursor
+                  let target = null;
+                  for (let i = ranges.length - 1; i >= 0; i--) {
+                    if (ranges[i].startLineNumber < curLine) { target = ranges[i]; break; }
+                  }
+                  if (!target) target = ranges[ranges.length - 1]; // wrap around
+                  editor.revealLineInCenter(target.startLineNumber);
+                  editor.setPosition({ lineNumber: target.startLineNumber, column: 1 });
+                  editor.focus();
+                }}
+              >
+                <ChevronUp size={12} />
+              </button>
+              <button
+                className="p-0.5 rounded text-vsc-text-dim hover:text-vsc-text hover:bg-vsc-list-hover transition-colors"
+                title="Next Change"
+                onClick={() => {
+                  const editor = editorRef.current;
+                  const decos = dirtyDecorationsRef.current;
+                  if (!editor || !decos) return;
+                  const ranges = decos.getRanges();
+                  if (!ranges.length) return;
+                  const curLine = editor.getPosition()?.lineNumber || 1;
+                  let target = null;
+                  for (let i = 0; i < ranges.length; i++) {
+                    if (ranges[i].startLineNumber > curLine) { target = ranges[i]; break; }
+                  }
+                  if (!target) target = ranges[0]; // wrap around
+                  editor.revealLineInCenter(target.startLineNumber);
+                  editor.setPosition({ lineNumber: target.startLineNumber, column: 1 });
+                  editor.focus();
+                }}
+              >
+                <ChevronDown size={12} />
+              </button>
+            </div>
+          )}
           {/* Preview toggle button */}
           {isPreviewable(activeTab.path) && (
             <button
@@ -232,6 +338,57 @@ export default function EditorArea() {
           </button>
         </div>
       )}
+
+      {/* AI Edit Bar — shown when AI has changed the currently open file */}
+      {activeTab && (() => {
+        const fileChange = chatFilesChanged.find(f => f.path === activeTab.path);
+        if (!fileChange) return null;
+        const totalEdits = (fileChange.linesAdded || 0) + (fileChange.linesRemoved || 0);
+        return (
+          <div className="flex items-center gap-2 px-3 py-1 bg-vsc-accent/5 border-b border-vsc-accent/20 no-select">
+            <span className="text-[11px] text-vsc-text font-medium">
+              {totalEdits} edit{totalEdits !== 1 ? 's' : ''}
+            </span>
+            {fileChange.linesAdded > 0 && <span className="text-[11px] text-vsc-success font-medium">+{fileChange.linesAdded}</span>}
+            {fileChange.linesRemoved > 0 && <span className="text-[11px] text-vsc-error font-medium">-{fileChange.linesRemoved}</span>}
+            <div className="flex-1" />
+            <button
+              className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium text-vsc-text-dim hover:text-vsc-text hover:bg-vsc-list-hover transition-colors"
+              title="View diff of changes"
+              onClick={() => {
+                if (activeTab?.originalContent != null) {
+                  openDiff(activeTab.originalContent, activeTab.content, activeTab.name);
+                }
+              }}
+            >
+              <Columns size={11} />
+              View Diff
+            </button>
+            <button
+              className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium text-vsc-success hover:bg-vsc-success/10 transition-colors"
+              title="Keep all edits"
+              onClick={() => setChatFilesChanged(chatFilesChanged.filter(f => f.path !== activeTab.path))}
+            >
+              <Check size={11} />
+              Keep
+            </button>
+            <button
+              className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium text-vsc-text-dim hover:text-vsc-error hover:bg-vsc-error/10 transition-colors"
+              title="Undo all edits to this file"
+              onClick={() => {
+                // Restore original content
+                if (activeTab?.originalContent != null) {
+                  useAppStore.getState().updateTabContent(activeTab.id, activeTab.originalContent);
+                }
+                setChatFilesChanged(chatFilesChanged.filter(f => f.path !== activeTab.path));
+              }}
+            >
+              <Undo2 size={11} />
+              Undo
+            </button>
+          </div>
+        );
+      })()}
 
       {/* Monaco Editor, Diff Viewer, Preview, or Browser */}
       <div className="flex-1 min-h-0">

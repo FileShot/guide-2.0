@@ -13,7 +13,7 @@ import {
   Paperclip, Mic, Zap, FileCode, ArrowUp, ChevronUp, Plus, Minus,
   Check, Undo2, X, Star, GripVertical, RotateCcw, Clock, Settings,
   Cloud, Key, FolderPlus, Sparkles, Eye, ImageIcon,
-  CheckCircle2, Circle, Loader2, ListTodo
+  CheckCircle2, Circle, Loader2, ListTodo, Bot, MessageSquare
 } from 'lucide-react';
 
 // guIDE Cloud AI — bundled providers with pre-seeded keys, rotated for rate-limit avoidance
@@ -372,7 +372,7 @@ export default function ChatPanel() {
   const cloudProvider = useAppStore(s => s.cloudProvider);
 
   const [input, setInput] = useState('');
-  const [planMode, setPlanMode] = useState(false);
+  const [chatMode, setChatMode] = useState('agent'); // 'agent' | 'plan' | 'ask'
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const inputRef = useRef(null);
   const textareaRef = useRef(null);
@@ -499,7 +499,9 @@ export default function ChatPanel() {
         cloudProvider: store.cloudProvider,
         cloudModel: store.cloudModel,
         params: {
-          planMode,
+          chatMode,
+          planMode: chatMode === 'plan',
+          askOnly: chatMode === 'ask',
           temperature: s.temperature,
           maxTokens: s.maxResponseTokens,
           topP: s.topP,
@@ -662,7 +664,7 @@ export default function ChatPanel() {
     } finally {
       useAppStore.getState().setChatStreaming(false);
     }
-  }, [chatStreaming, addChatMessage, planMode]);
+  }, [chatStreaming, addChatMessage, chatMode]);
 
   // handleSend: reads from input state
   const handleSend = useCallback(() => {
@@ -1121,19 +1123,32 @@ export default function ChatPanel() {
             {/* Separator */}
             <div className="w-px h-4 bg-vsc-panel-border/50 mx-0.5" />
 
-            {/* Plan mode toggle */}
-            <button
-              className={`flex items-center gap-1 px-2 py-1 rounded-md text-vsc-xs font-medium transition-colors ${
-                planMode
-                  ? 'bg-purple-500/15 text-purple-400'
-                  : 'text-vsc-text-dim hover:bg-vsc-list-hover hover:text-vsc-text'
-              }`}
-              onClick={() => setPlanMode(!planMode)}
-              title="Plan mode — create a plan before executing"
-            >
-              <FileCode size={12} />
-              <span>Plan</span>
-            </button>
+            {/* Mode selector — Agent / Plan / Ask */}
+            <div className="flex items-center bg-vsc-bg/50 rounded-md p-0.5 gap-px">
+              {[
+                { id: 'agent', label: 'Agent', icon: Bot, title: 'Agent mode — autonomous with tool calls' },
+                { id: 'plan', label: 'Plan', icon: FileCode, title: 'Plan mode — create a plan before executing' },
+                { id: 'ask', label: 'Ask', icon: MessageSquare, title: 'Ask mode — question and answer only' },
+              ].map(mode => (
+                <button
+                  key={mode.id}
+                  className={`flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
+                    chatMode === mode.id
+                      ? mode.id === 'agent'
+                        ? 'bg-vsc-accent/15 text-vsc-accent'
+                        : mode.id === 'plan'
+                          ? 'bg-purple-500/15 text-purple-400'
+                          : 'bg-blue-500/15 text-blue-400'
+                      : 'text-vsc-text-dim hover:text-vsc-text hover:bg-vsc-list-hover/50'
+                  }`}
+                  onClick={() => setChatMode(mode.id)}
+                  title={mode.title}
+                >
+                  <mode.icon size={11} />
+                  <span>{mode.label}</span>
+                </button>
+              ))}
+            </div>
 
             {/* Separator */}
             <div className="w-px h-4 bg-vsc-panel-border/50 mx-0.5" />
