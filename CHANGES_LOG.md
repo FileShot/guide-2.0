@@ -4,6 +4,30 @@
 
 ---
 
+## 2026-04-02 — v2.3.0 Deployment
+
+### CRITICAL FIX: LicenseManager import crash (v2.3.1)
+- **File:** `electron-main.js` line 185
+- **Removed:** `const LicenseManager = require('./licenseManager');`
+- **Added:** `const { LicenseManager } = require('./licenseManager');`
+- **Why:** `licenseManager.js` exports `{ LicenseManager }` (named), but was imported as default. `new LicenseManager(...)` threw `TypeError: LicenseManager is not a constructor`, crashing the app at startup before any window appeared. Confirmed via crash log at `%APPDATA%/guide-ide/logs/guide-main.log`.
+
+### GitHub Actions Build & Release
+- **Tag:** v2.3.0 pushed to GitHub, triggered Build & Release workflow (Run #15)
+- **Result:** All 5 build jobs completed successfully
+- **Assets:** 7 release artifacts uploaded (win-cpu, win-cuda, linux-cpu, linux-cuda, mac-arm64, mac-x64, plus blockmap/yml)
+
+### Download Page Update
+- **File:** `C:\Users\brend\IDE\website\src\app\download\page.tsx` line 5
+- **Removed:** `const CURRENT_VERSION = '2.2.8';`
+- **Added:** `const CURRENT_VERSION = '2.3.0';`
+- **Also updated directly on server** at `E:\IDE-website\src\app\download\page.tsx` (Syncthing was behind)
+- **Server rebuild:** Job 11 completed — graysoft PM2 process restarted
+- **Verified:** graysoft.dev/download shows v2.3.0, download link returns HTTP 200 (137 MB)
+- **CP:** Still healthy (200) after all operations
+
+---
+
 ## 2026-04-02 — Phase 4: Full IPC Architecture Conversion
 
 ### Phase 4A: New electron-main.js (IPC architecture)
