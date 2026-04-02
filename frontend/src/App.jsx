@@ -132,9 +132,24 @@ export default function App() {
         if (data?.filePath) {
           const tab = s.openTabs.find(t => t.path === data.filePath);
           if (tab) {
+            // R51-Fix: Don't markTabSaved — keep the tab in a modified state
+            // so dirty diff decorations (green/red gutter) show the AI's changes.
+            // originalContent stays as-is (the pre-AI state), content gets updated.
             s.updateTabContent(tab.id, data.newContent || '');
-            s.markTabSaved(tab.id);
           }
+          // R51-Fix: Populate chatFilesChanged so the keep/undo banner appears
+          // above the chat input when the AI creates or modifies files.
+          const fileName = data.filePath.split(/[\\/]/).pop() || data.filePath;
+          const oldContent = tab?.content || '';
+          const newContent = data.newContent || '';
+          const oldLines = oldContent.split('\n').length;
+          const newLines = newContent.split('\n').length;
+          s.addChatFileChanged({
+            path: data.filePath,
+            name: fileName,
+            linesAdded: data.isNew ? newLines : Math.max(0, newLines - oldLines),
+            linesRemoved: data.isNew ? 0 : Math.max(0, oldLines - newLines),
+          });
         }
         break;
 

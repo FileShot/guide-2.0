@@ -789,12 +789,17 @@ class LLMEngine extends EventEmitter {
     };
 
     const onResponseChunk = (chunk) => {
-      if (!_firstTokenReceived) { _firstTokenReceived = true; }
+      if (!_firstTokenReceived) {
+        _firstTokenReceived = true;
+        // R51-Diag: Log first token details to diagnose thinking visibility
+        console.log(`[LLM] First token received: segmentType=${chunk.segmentType || 'none'}, textLen=${chunk.text?.length || 0}, text=${JSON.stringify(chunk.text?.slice(0, 50))}`);
+      }
       resetStallTimer();
 
       if (chunk.segmentType === 'thought') {
         // Thinking token from native segmented output
         thinkingTokenCount++;
+        if (thinkingTokenCount === 1) console.log('[LLM] R51-Diag: First NATIVE thinking token received');
         if (onThinkingToken) onThinkingToken(chunk.text);
         // Still check for tool calls inside thought blocks
         if (toolDetectBuffer.length < TOOL_DETECT_BUFFER_MAX) {
@@ -867,7 +872,8 @@ class LLMEngine extends EventEmitter {
     try {
       console.log('[LLM] Awaiting _runGeneration...');
       const result = await this._runGeneration(merged, onResponseChunk);
-      console.log(`[LLM] _runGeneration completed: responseLen=${fullResponse.length}, hasLastEval=${!!result?.lastEvaluation}`);
+      console.log(`[LLM] _runGeneration completed: responseLen=${fullResponse.length}, hasLastEval=${!!result?.lastEvaluation}, thinkingChars=${thinkingTokenCount}`);
+      if (thinkingTokenCount === 0) console.log('[LLM] R51-Diag: NO thinking tokens produced during this generation');
 
       // Flush remaining tag buffer
       if (tagBuffer) {

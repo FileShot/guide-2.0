@@ -4,6 +4,102 @@
 
 ---
 
+## 2026-04-03 — R51: 8-Issue Bug Fix Session
+
+### Issue 1 — Naked code outside code blocks in chat (MarkdownRenderer.jsx)
+- **File:** `frontend/src/components/chat/MarkdownRenderer.jsx`
+- **What was removed:** R48-Layer3 fence-tracking loop that only handled auto-closing unclosed fences.
+- **What was added:** Combined fence-tracking + HTML-escaping loop. Outside code fences: `<` and `>` are escaped to `&lt;` and `&gt;`. Inside code fences: content passes through unchanged. After loop: `displayContent = escapedLines.join('\n')`, then auto-close unclosed fence if needed.
+- **Why:** ReactMarkdown without rehype-raw strips HTML tags silently — `<div>content</div>` becomes just "content." With escaping, HTML appears as visible text. This caused "naked code" appearing in chat when models emitted HTML outside code fences.
+
+### Issue 2 — Todo list not checking off items (agenticLoop.js)
+- **File:** `pipeline/agenticLoop.js` — After the `stream.todoUpdate()` call at ~line 1681
+- **What was added:** R51-Fix auto-advance block. After any successful non-todo tool call (write_file, edit_file, etc.), the in-progress todo is marked `done` and the next pending todo is set to `in-progress`. Skips write_todos/update_todo tool calls (those manage their own state).
+- **Why:** Models didn't reliably call update_todo after completing tasks. Auto-advance ensures todo items progress visually as the model works.
+
+### Issue 3 — Todo persists after session clear (appStore.js + server/main.js)
+- **File:** `frontend/src/stores/appStore.js` — `clearChat()` function (~line 370)
+- **What was added:** `todos: []` to the set() call in clearChat.
+- **File:** `server/main.js` — `/api/session/clear` handler (~line 955)
+- **What was added:** `ctx.mcpToolServer._todos = []; ctx.mcpToolServer._todoNextId = 1;`
+- **Why:** clearChat didn't reset the frontend todo state; backend session clear didn't reset the server-side todo array. Both sides now clear.
+
+### Issue 4 — No keep/undo prompt after AI file modifications (App.jsx)
+- **File:** `frontend/src/App.jsx` — `agent-file-modified` event handler (~line 131)
+- **What was added:** Call to `s.addChatFileChanged({path, name, linesAdded, linesRemoved})` which populates the `chatFilesChanged` array. This triggers the keep/undo banner above the chat input.
+- **Why:** `addChatFileChanged` existed in the store but was NEVER called by any code path. The keep/undo banner requires `chatFilesChanged.length > 0`.
+
+### Issue 5 — No dirty diff colors after AI file modifications (App.jsx)
+- **File:** `frontend/src/App.jsx` — `agent-file-modified` event handler (~line 131)
+- **What was removed:** `markTabSaved()` call after `updateTabContent()`.
+- **Why:** `markTabSaved()` sets `modified: false` and syncs `originalContent` to the current content, which kills dirty diff decorations. Without it, the tab stays modified and EditorArea's `computeDirtyDiff` can compare `originalContent` (pre-AI state) vs `content` (post-AI state) to show green/red gutter indicators.
+
+### Issue 6 — File explorer not updating after delete/rename (server/main.js)
+- **File:** `server/main.js` — `/api/files/delete` handler (~line 1217)
+- **What was added:** `mainWindow.webContents.send('files-changed')` after successful deletion.
+- **File:** `server/main.js` — `/api/files/rename` handler (~line 1236)
+- **What was added:** `mainWindow.webContents.send('files-changed')` after successful rename.
+- **Why:** Neither endpoint emitted `files-changed`. The App.jsx handler for `files-changed` re-fetches the file tree. Without the event, the sidebar tree was stale until manual refresh.
+
+### Issue 7 — Multiple code blocks / repeated tool failures (mcpToolServer.js)
+- **File:** `mcpToolServer.js` — `executeTool()` method, after `_normalizeFsParams`, before the early-reject check (~line 864)
+- **What was added:** R51-Fix block that strips leading slashes from path params (`filePath`, `dirPath`, `path`, `oldPath`, `newPath`) when they don't have a Windows drive letter. Regex: `/^\//.test(param) && !/^[A-Za-z]:/.test(param)` → `param.replace(/^\/+/, '')`.
+- **Why:** Models output Unix-style paths like `/js/glass-morph.js`. On Windows, `path.isAbsolute('/js/glass-morph.js')` returns true. `path.resolve('/js/glass-morph.js')` becomes `C:\js\glass-morph.js` — outside the project. The early-reject check rejects it. Model retries 2-3 times, each creating a new visible file content block. By stripping leading slashes, the path becomes relative (`js/glass-morph.js`) and the write succeeds on the first attempt.
+
+### Issue 8 — Messages disappearing on finalization (ChatPanel.jsx)
+- **File:** `frontend/src/components/ChatPanel.jsx` — Finalization block (~line 650)
+- **What was changed:**
+  - Added `hasThinking` check: `const hasThinking = thinkingText && thinkingText.trim()`. Condition is now `hasContent || hasToolCalls || hasThinking`.
+  - When only thinking is present (no text/tools), sets messageContent to `result.text` or a placeholder so the thinking block is preserved.
+  - Added R51-Safety fallback: if `chatStreamingText` had content but `messageContent` is empty (segment tracking failure), force-creates the message with the streaming text.
+  - Added another R51-Safety fallback: if `result.text` had content but streaming state was empty (potential IPC race), force-creates the message with result.text.
+  - Added R51-Diag logging: logs segments count, messageContent length, hasContent, hasToolCalls, hasThinking, streamingText length, result.text length on every finalization.
+- **Why:** User reported messages vanishing ~50% of the time in long conversations. Root cause not fully identified from code analysis. Multiple safety nets added to prevent content loss regardless of the underlying cause. Diagnostic logging added to trace the issue in production.
+
+### Thinking Diagnostics (llmEngine.js)
+- **File:** `llmEngine.js` — `onResponseChunk` callback (~line 793)
+- **What was added:** Log first token's segmentType and text. Log when first NATIVE thinking token is received. Log summary after generation completes showing thinkingChars count and whether any thinking tokens were produced.
+- **Why:** User has never seen the reasoning/thinking dropdown in the UI despite using Qwen3.5-2B which should support thinking. These diagnostics will show whether the model is actually producing thinking tokens during generation.
+
+---
+
+## 2026-04-03 — Graysoft: Full Admin Panel Overhaul (Backend + Frontend)
+
+### Backend — Admin API Routes & db.ts Functions
+- **File:** `src/lib/db.ts` — Added `country?: string` to AnalyticsEvent interface. Updated `trackEvent()` to accept and store `country` parameter. Added 10 admin helper functions: `getAllUsers()` (with license/purchase aggregation), `deleteUser()` (cascade), `getAllLicenses()` (with user email), `revokeLicense()`, `getAllPosts()`, `deletePost()`, `deleteReply()`, `getAllPurchases()`, `getAllDonations()`, `getAdminAnalytics()` (country breakdown + active visitors in last 5 min).
+- **File:** `src/app/api/analytics/track/route.ts` — Added country header extraction from `cf-ipcountry`, `x-vercel-ip-country`, `x-country-code` headers. Passes country to `trackEvent()`.
+- **File:** `src/app/api/analytics/route.ts` — Added `getAdminAnalytics()`, `getAllPurchases()`, `getAllDonations()` to response payload.
+- **File:** `src/app/api/admin/users/route.ts` — NEW. GET returns all users with licenseCount, activeLicenses, totalSpent, purchaseCount. DELETE accepts `{ userId }` for cascade deletion.
+- **File:** `src/app/api/admin/licenses/route.ts` — NEW. GET returns all licenses with userEmail/userName. PATCH accepts `{ licenseId, action: 'revoke' }`.
+- **File:** `src/app/api/admin/community/route.ts` — NEW. GET returns all posts with replies. DELETE accepts `{ postId }` or `{ postId, replyId }`.
+
+### Frontend — Admin Page Rewrite
+- **File:** `src/app/admin/page.tsx` — Complete rewrite from 330-line overview-only page to ~600-line tabbed admin panel.
+- **Removed:** Single-page layout with inline period tabs and 3-column detail panels.
+- **Added:** 5-tab architecture: Overview | Users | Licenses | Community | Revenue.
+- **Overview tab:** Active visitors badge (green, pulsing), period selector (Today/7d/30d/All), 8 stat cards, sparkline charts, 4-column detail grid (Top Pages, Downloads by Platform, Traffic Sources, Visitor Countries), Recent Signups table.
+- **Users tab:** Search bar, sortable table (email, name, licenses, spent, joined), delete with confirmation dialog, cascade warning.
+- **Licenses tab:** Filter by status (all/active/revoked), table with masked keys, plan badges, machine count, revoke action.
+- **Community tab:** Post cards with title/author/category/date/likes, threaded replies, individual delete for posts and replies with confirmation.
+- **Revenue tab:** 4 summary stat cards (total revenue, donations, purchase count, avg purchase), purchase history table, donation history table.
+- **Shared components:** ConfirmDialog modal, enhanced MiniBar with title tooltip.
+
+## 2026-04-03 — Graysoft: Analytics Data Persistence Fix + Model Reviews
+- **File:** `src/lib/db.ts` (graysoft website) — `DATA_DIR` changed from `process.cwd()/data` to detect standalone mode and resolve to project root `E:\IDE-website\data/`. Previously, all analytics data was stored inside `.next-ready/standalone/data/` which gets deleted on every rebuild.
+- **File:** `src/lib/rateLimit.ts` — Same `isStandalone` fix for `PERSIST_PATH`.
+- **File:** `src/app/api/ai/proxy/route.ts` — Same `isStandalone` fix for `QUOTA_PATH`.
+- **File:** `src/lib/db.ts` — Added `ModelReview` interface, `modelReviews` array to Database schema, and 3 exported functions: `getReviewsBySlug`, `getUserReviewForSlug`, `createModelReview`. These were imported by `models/[slug]/reviews/route.ts` but never implemented — caused Turbopack build failure on clean builds (was masked by build cache).
+- **Root cause:** PM2 ecosystem sets graysoft cwd to `.next-ready/standalone/`, so `process.cwd() + '/data'` pointed inside the build output dir. Every `Remove-Item '.next-ready' -Recurse -Force` deleted all analytics, rate limit, and quota data.
+- **Fix:** `const isStandalone = process.cwd().includes('.next-ready')` → resolve up 2 directories to project root. Data now lives at `E:\IDE-website\data/` which survives rebuilds.
+
+## 2026-04-03 — R50-A: Mode Selector Dropdown
+- **File:** `frontend/src/components/ChatPanel.jsx` lines ~1143-1186
+- **Removed:** Three naked Agent/Plan/Ask buttons rendered as a pill-group in the chat toolbar.
+- **Added:** Single dropdown button showing current mode (icon + label + chevron). Opens a popover above with all 3 mode options, each showing icon, name, description, and a checkmark for the selected mode. Click-outside closes dropdown.
+- **Added:** `modeDropdownOpen` state and `modeDropdownRef` ref for dropdown toggle and click-outside handling.
+- **Added:** `useEffect` hook for click-outside dismissal (lines ~400-408).
+- **Why:** User requested VS Code Copilot-style dropdown instead of 3 separate buttons. Cleaner UI, less visual clutter, and provides brief descriptions of each mode.
+
 ## 2026-04-03 — R49-A: Model Loading Progress Bar in StatusBar
 - **File:** `frontend/src/components/StatusBar.jsx` lines ~287-302
 - **Added:** `modelLoadProgress` store subscription. Replaced simple "Loading..." text in model info section with inline progress bar showing animated gradient fill + percentage.

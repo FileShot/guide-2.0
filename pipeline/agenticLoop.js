@@ -1680,6 +1680,21 @@ async function handleLocalChat(ctx, message, context, helpers) {
           if (toolCall.name === 'write_todos' || toolCall.name === 'update_todo') {
             stream.todoUpdate(mcpToolServer._todos || []);
           }
+
+          // R51-Fix: Auto-advance todos after successful non-todo tool calls.
+          // Small models (2B-7B) rarely call update_todo themselves, so the todo
+          // list stays at 0% even after completing work. This auto-marks the current
+          // in-progress item as done and advances the next pending item.
+          if (toolSucceeded && toolCall.name !== 'write_todos' && toolCall.name !== 'update_todo') {
+            const todos = mcpToolServer._todos || [];
+            const inProgress = todos.find(t => t.status === 'in-progress');
+            if (inProgress) {
+              inProgress.status = 'done';
+              const nextPending = todos.find(t => t.status === 'pending');
+              if (nextPending) nextPending.status = 'in-progress';
+              stream.todoUpdate([...todos]);
+            }
+          }
         } catch (err) {
           const entry = {
             tool: toolCall.name,

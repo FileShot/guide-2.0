@@ -861,6 +861,16 @@ class MCPToolServer {
       }
     }
 
+    // R51-Fix: Strip leading slashes from Unix-style paths — models output /path/file.js
+    // meaning path/file.js relative to project root. On Windows, path.isAbsolute('/path/file.js')
+    // returns true and resolves to C:\path\file.js, which escapes the project and fails.
+    // Real Windows absolute paths have drive letters (C:\...) and won't match this check.
+    for (const key of ['filePath', 'dirPath', 'path', 'oldPath', 'newPath']) {
+      if (params[key] && typeof params[key] === 'string' && /^\//.test(params[key]) && !/^[A-Za-z]:/.test(params[key])) {
+        params[key] = params[key].replace(/^\/+/, '');
+      }
+    }
+
     // Early-reject absolute paths that escape the project
     const FP_TOOLS = ['write_file', 'append_to_file', 'edit_file', 'delete_file', 'read_file', 'rename_file', 'get_file_info'];
     if (FP_TOOLS.includes(toolName) && params.filePath && path.isAbsolute(params.filePath) && this.projectPath) {

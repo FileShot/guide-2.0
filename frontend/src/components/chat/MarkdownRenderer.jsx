@@ -190,6 +190,12 @@ export default function MarkdownRenderer({ content, streaming }) {
   {
     const lines = content.split('\n');
     let openFenceLen = 0; // length of the opening fence backticks (0 = not inside a fence)
+    // R51-Fix: Escape HTML entities outside code fences. When the model outputs HTML
+    // tags (like <div>, <script>, <head>) in its prose text, ReactMarkdown strips them
+    // silently — the tags vanish and their text children appear as a jumbled mess of
+    // "naked code." By escaping < and > to &lt; &gt; outside of fences, the HTML appears
+    // as visible code text in the chat instead of being stripped or rendered.
+    const escapedLines = [];
     for (const line of lines) {
       const fenceMatch = line.match(/^(`{3,})/);
       if (fenceMatch) {
@@ -200,10 +206,18 @@ export default function MarkdownRenderer({ content, streaming }) {
           openFenceLen = 0; // closing fence
         }
         // else: inner backticks with fewer ticks than opener — ignored
+        escapedLines.push(line);
+      } else if (openFenceLen > 0) {
+        // Inside a code fence — leave as-is
+        escapedLines.push(line);
+      } else {
+        // Outside a code fence — escape HTML tags so they render as visible text
+        escapedLines.push(line.replace(/</g, '&lt;').replace(/>/g, '&gt;'));
       }
     }
+    displayContent = escapedLines.join('\n');
     if (openFenceLen > 0) {
-      displayContent = content + '\n' + '`'.repeat(openFenceLen);
+      displayContent += '\n' + '`'.repeat(openFenceLen);
     }
   }
 

@@ -373,7 +373,9 @@ export default function ChatPanel() {
 
   const [input, setInput] = useState('');
   const [chatMode, setChatMode] = useState('agent'); // 'agent' | 'plan' | 'ask'
+  const [modeDropdownOpen, setModeDropdownOpen] = useState(false);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const modeDropdownRef = useRef(null);
   const inputRef = useRef(null);
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -392,6 +394,18 @@ export default function ChatPanel() {
       if (raw) setSavedSessions(JSON.parse(raw));
     } catch (_) {}
   }, []);
+
+  // Close mode dropdown on click outside
+  useEffect(() => {
+    if (!modeDropdownOpen) return;
+    const handler = (e) => {
+      if (modeDropdownRef.current && !modeDropdownRef.current.contains(e.target)) {
+        setModeDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [modeDropdownOpen]);
 
   // Auto-save current session to localStorage when messages change
   useEffect(() => {
@@ -640,7 +654,33 @@ export default function ChatPanel() {
       // R40: Create message if there's text content OR tool calls
       const hasContent = messageContent && messageContent.trim();
       const hasToolCalls = finalToolCalls.length > 0;
-      if (hasContent || hasToolCalls) {
+      const hasThinking = thinkingText && thinkingText.trim();
+
+      // R51-Diag: Log finalization state so we can trace vanishing messages
+      console.log('[ChatPanel] Finalization:', {
+        segmentsLen: segments.length,
+        messageContentLen: messageContent.length,
+        hasContent: !!hasContent,
+        hasToolCalls,
+        hasThinking: !!hasThinking,
+        streamingTextLen: state.chatStreamingText?.length || 0,
+        resultTextLen: result?.text?.length || 0,
+        resultSuccess: result?.success,
+      });
+
+      // R51-Fix: Also save messages that have ONLY thinking content (no text/tools).
+      // Without this, thinking-only responses vanish on finalization because
+      // setChatStreaming(false) clears chatThinkingText.
+      // Also: safety net — if content was visible during streaming but finalization
+      // would discard it, force-create the message with the streaming text.
+      if (hasContent || hasToolCalls || hasThinking) {
+        // If only thinking and no content, use result.text or a minimal placeholder
+        if (!hasContent && !hasToolCalls && hasThinking) {
+          messageContent = result?.text || '*The model reasoned but produced no text output.*';
+          if (!messageSegments.length) {
+            messageSegments.push({ type: 'text', content: messageContent });
+          }
+        }
         useAppStore.getState().addChatMessage({
           role: 'assistant',
           content: messageContent || '',
@@ -655,11 +695,35 @@ export default function ChatPanel() {
             ? (GUIDE_CLOUD_PROVIDERS.has(store.cloudProvider) ? 'guIDE Cloud AI' : store.cloudModel || store.cloudProvider)
             : (useAppStore.getState().modelInfo?.name || undefined),
         });
+      } else if (state.chatStreamingText && state.chatStreamingText.trim()) {
+        // R51-Safety: Content was visible during streaming but segments/messageContent
+        // is empty — something went wrong in segment tracking. Preserve the visible text.
+        console.warn('[ChatPanel] R51-Safety: streamingText had content but messageContent was empty — forcing message creation');
+        useAppStore.getState().addChatMessage({
+          role: 'assistant',
+          content: state.chatStreamingText,
+          thinking: thinkingText || undefined,
+          model: store.cloudProvider
+            ? (GUIDE_CLOUD_PROVIDERS.has(store.cloudProvider) ? 'guIDE Cloud AI' : store.cloudModel || store.cloudProvider)
+            : (useAppStore.getState().modelInfo?.name || undefined),
+        });
       } else if (result && result.success === false && result.error) {
         // v2.2.10: Display backend error messages (e.g. "Provider not configured")
         useAppStore.getState().addChatMessage({
           role: 'assistant',
           content: `Error: ${result.error}`,
+        });
+      } else if (result?.text && result.text.trim()) {
+        // R51-Safety: Backend returned text but nothing made it to streaming state.
+        // This can happen if IPC events were lost or arrived after handle reply.
+        console.warn('[ChatPanel] R51-Safety: result.text had content but streaming state was empty — forcing message creation');
+        useAppStore.getState().addChatMessage({
+          role: 'assistant',
+          content: result.text,
+          thinking: thinkingText || undefined,
+          model: store.cloudProvider
+            ? (GUIDE_CLOUD_PROVIDERS.has(store.cloudProvider) ? 'guIDE Cloud AI' : store.cloudModel || store.cloudProvider)
+            : (useAppStore.getState().modelInfo?.name || undefined),
         });
       }
     } catch (err) {
@@ -1127,32 +1191,47 @@ export default function ChatPanel() {
             {/* Separator */}
             <div className="w-px h-4 bg-vsc-panel-border/50 mx-0.5" />
 
-            {/* Mode selector — Agent / Plan / Ask */}
-            <div className="flex items-center bg-vsc-bg/50 rounded-md p-0.5 gap-px">
-              {[
-                { id: 'agent', label: 'Agent', icon: Bot, title: 'Agent mode — autonomous with tool calls' },
-                { id: 'plan', label: 'Plan', icon: FileCode, title: 'Plan mode — create a plan before executing' },
-                { id: 'ask', label: 'Ask', icon: MessageSquare, title: 'Ask mode — question and answer only' },
-              ].map(mode => (
-                <button
-                  key={mode.id}
-                  className={`flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
-                    chatMode === mode.id
-                      ? mode.id === 'agent'
-                        ? 'bg-vsc-accent/15 text-vsc-accent'
-                        : mode.id === 'plan'
-                          ? 'bg-purple-500/15 text-purple-400'
-                          : 'bg-blue-500/15 text-blue-400'
-                      : 'text-vsc-text-dim hover:text-vsc-text hover:bg-vsc-list-hover/50'
-                  }`}
-                  onClick={() => setChatMode(mode.id)}
-                  title={mode.title}
-                >
-                  <mode.icon size={11} />
-                  <span>{mode.label}</span>
-                </button>
-              ))}
-            </div>
+            {/* Mode selector — Dropdown */}
+            {(() => {
+              const modes = [
+                { id: 'agent', label: 'Agent', icon: Bot, desc: 'Autonomous with tool calls', color: 'text-vsc-accent', bg: 'bg-vsc-accent/15' },
+                { id: 'plan', label: 'Plan', icon: FileCode, desc: 'Plan before executing', color: 'text-purple-400', bg: 'bg-purple-500/15' },
+                { id: 'ask', label: 'Ask', icon: MessageSquare, desc: 'Question and answer only', color: 'text-blue-400', bg: 'bg-blue-500/15' },
+              ];
+              const current = modes.find(m => m.id === chatMode) || modes[0];
+              return (
+                <div className="relative" ref={modeDropdownRef}>
+                  <button
+                    className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium transition-colors ${current.bg} ${current.color}`}
+                    onClick={() => setModeDropdownOpen(!modeDropdownOpen)}
+                  >
+                    <current.icon size={11} />
+                    <span>{current.label}</span>
+                    <ChevronUp size={9} className={`ml-0.5 transition-transform ${modeDropdownOpen ? '' : 'rotate-180'}`} />
+                  </button>
+                  {modeDropdownOpen && (
+                    <div className="absolute bottom-full left-0 mb-1 w-52 bg-vsc-dropdown border border-vsc-panel-border rounded-lg shadow-xl z-50 py-1 overflow-hidden">
+                      {modes.map(mode => (
+                        <button
+                          key={mode.id}
+                          className={`w-full flex items-start gap-2 px-3 py-2 text-left transition-colors hover:bg-vsc-list-hover ${
+                            chatMode === mode.id ? 'bg-vsc-list-hover/50' : ''
+                          }`}
+                          onClick={() => { setChatMode(mode.id); setModeDropdownOpen(false); }}
+                        >
+                          <mode.icon size={14} className={`mt-0.5 flex-shrink-0 ${chatMode === mode.id ? mode.color : 'text-vsc-text-dim'}`} />
+                          <div className="min-w-0">
+                            <div className={`text-[11px] font-semibold ${chatMode === mode.id ? mode.color : 'text-vsc-text'}`}>{mode.label}</div>
+                            <div className="text-[10px] text-vsc-text-dim leading-tight">{mode.desc}</div>
+                          </div>
+                          {chatMode === mode.id && <Check size={12} className={`ml-auto mt-0.5 flex-shrink-0 ${mode.color}`} />}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Separator */}
             <div className="w-px h-4 bg-vsc-panel-border/50 mx-0.5" />

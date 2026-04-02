@@ -370,6 +370,7 @@ const useAppStore = create((set, get) => ({
       streamingFileBlocks: [],
       streamingSegments: [],
       messageQueue: [],
+      todos: [],
       _fileTokenBuffer: null, _fileTokenTimer: null,
       _textTokenBuffer: null, _textTokenTimer: null,
     });

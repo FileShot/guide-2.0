@@ -956,6 +956,12 @@ app.post('/api/session/clear', async (req, res) => {
     try { llmEngine.cancelGeneration(); } catch (_) {}
     await new Promise(r => setTimeout(r, 100));
     await llmEngine.resetSession();
+    // R51-Fix: Clear todo state on session clear so the todo list
+    // doesn't persist visually after the user hits the trash can button.
+    if (ctx.mcpToolServer) {
+      ctx.mcpToolServer._todos = [];
+      ctx.mcpToolServer._todoNextId = 1;
+    }
     ctx.agenticCancelled = false;
     res.json({ success: true });
   } catch (e) {
@@ -1206,6 +1212,11 @@ app.post('/api/files/delete', async (req, res) => {
     } else {
       fs.unlinkSync(fullPath);
     }
+    // R51-Fix: Emit files-changed so the frontend file explorer updates
+    // immediately after deletion (instead of requiring manual refresh).
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('files-changed');
+    }
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -1221,6 +1232,10 @@ app.post('/api/files/rename', async (req, res) => {
     const fullNew = path.isAbsolute(newPath) ? newPath : path.join(ctx.currentProjectPath || '', newPath);
     if (!fs.existsSync(fullOld)) return res.status(404).json({ error: 'Source not found' });
     fs.renameSync(fullOld, fullNew);
+    // R51-Fix: Emit files-changed after rename so file explorer updates live.
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('files-changed');
+    }
     res.json({ success: true, path: fullNew });
   } catch (e) {
     res.status(500).json({ error: e.message });
