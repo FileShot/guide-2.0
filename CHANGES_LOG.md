@@ -4,6 +4,38 @@
 
 ---
 
+## 2026-04-03 — R56: Streaming Bleed Fix + KV Cache Preservation After Tool Calls
+
+### Issue 1 — Previous response text bleeds into next response (appStore.js)
+- **File:** `frontend/src/stores/appStore.js` — `setChatStreaming()` (~line 178)
+- **What was changed:** Streaming state fields (`chatStreamingText`, `chatThinkingText`, `chatGeneratingTool`, `streamingSegments`, `streamingToolCalls`, `_textTokenBuffer`, `_textTokenTimer`) are now cleared on BOTH `setChatStreaming(true)` and `setChatStreaming(false)`.
+- **What was before:** `set({ chatStreaming: val, ...(val ? {} : { clear fields }) })` — only cleared fields when `val=false`. When `val=true`, the spread was `{}` (nothing cleared).
+- **Root cause:** Late-arriving IPC `llm-token` events after `setChatStreaming(false)` could write to `chatStreamingText` via `appendStreamToken()` (which has no `chatStreaming` guard). When the next response started with `setChatStreaming(true)`, those stale tokens were NOT cleared, causing previous response text to appear at the start of the new response.
+- **Observable effect:** Text from a previous AI response should no longer appear at the beginning of the next response.
+
+### Issue 2 — KV cache cleared on every agentic iteration after tool calls (llmEngine.js)
+- **File:** `llmEngine.js` — `_handleGenerationError()` tool_call abort path (~line 1070)
+- **What was added:** `this.lastEvaluation = { contextWindow: [...this.chatHistory] };` after pushing the model response to chatHistory.
+- **What was before:** The tool_call abort path returned without setting `this.lastEvaluation`. Since `useKvCache = this._kvReuseCooldown <= 0 && this.lastEvaluation` (line 959), `useKvCache` was always `false` after tool calls. This caused `eraseContextTokenRanges` to clear the entire KV cache on every agentic iteration.
+- **Root cause:** Tool call detection fires `cancelGeneration('tool_call')` which aborts the generation via AbortError. The error goes to `_handleGenerationError` which returns WITHOUT setting `lastEvaluation`. The normal completion path (lines 903-904) that sets `lastEvaluation` is never reached. Every subsequent generation re-evaluates the full conversation from scratch (including 16K+ chars of system prompt).
+- **Evidence from log:** 0.8B model had `useKvCache=false` on ALL 10 iterations and never broke out of write_todos loop. 2B model had `kvReuse=true` on iteration 4 (race: eogToken beat abort), broke out of the loop, and said "Now I'll begin the implementation."
+- **Observable effect:** Agentic tool call iterations should be faster (KV cache reused instead of rebuilt). Models should maintain better context continuity between iterations, reducing looping behavior.
+
+### Wrapper Investigation — JinjaTemplateChatWrapper is correct for Qwen3.5
+- **Finding:** Auto-resolve in node-llama-cpp v3.18.1 tests 12 QwenChatWrapper configurations (including `variation: "3.5"`) against the model's Jinja template via `isJinjaTemplateEquivalentToSpecializedChatWrapper`. ALL 12 fail — the model's Jinja template produces different output than QwenChatWrapper. JinjaTemplateChatWrapper uses the model's OWN template from GGUF metadata and is the correct choice. QwenChatWrapper is a hand-coded approximation that doesn't match this model's template.
+- **R52/R54 revert status:** Fully reverted. All 7 `new LlamaChat()` calls use `{ contextSequence: this.sequence }` only. No `_buildThinkingChatWrapper`, no `additionalRenderParameters`, no `enable_thinking`. Verified in code.
+- **No code change.** This is a documentation finding only.
+
+## 2026-04-06 — R55: File Explorer Auto-Refresh in Electron Mode
+
+### Issue — File tree not refreshing after delete/rename/create (electron-main.js)
+- **File:** `electron-main.js` — 3 handlers: `/api/files/delete` (line ~480), `/api/files/rename` (line ~493), `/api/files/create` (line ~467)
+- **What was added:** `if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('files-changed');` before the return statement in all three handlers.
+- **Root cause:** The R51 fix added `files-changed` event emission to `server/main.js` (web server mode) but NOT to `electron-main.js` (actual Electron app). In Electron mode, api-fetch requests are routed via IPC to `electron-main.js`, which has its own copy of all API handlers. These handlers performed the filesystem operation but never emitted the event, so App.jsx's `files-changed` handler never fired, and the tree never refreshed.
+- **Why it wasn't caught:** Testing was done via `node server/main.js` (web server mode) where the event WAS being emitted. The Electron app path was untested.
+
+---
+
 ## 2026-04-05 — R54: Remove JinjaTemplateChatWrapper Override (Root Cause of write_todos Loop)
 
 ### Issue 1 — Chat wrapper swap caused write_todos infinite loop (llmEngine.js)

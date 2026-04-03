@@ -1071,6 +1071,18 @@ class LLMEngine extends EventEmitter {
       // Tool call detected — return the tool block
       const sanitized = this._sanitizeResponse(fullResponse);
       this.chatHistory.push({ type: 'model', response: [sanitized] });
+
+      // R56-Fix-B: Preserve KV cache state after tool call aborts.
+      // Previously, lastEvaluation was never set in this path, causing
+      // useKvCache=false on every subsequent iteration. The entire KV cache
+      // (including 16K+ chars of system prompt) was rebuilt from scratch
+      // on every agentic iteration. This made small models especially
+      // vulnerable to looping because they couldn't build context continuity.
+      // The 2B model broke out of write_todos loops specifically when
+      // kvReuse=true (race: eogToken beat abort). Setting lastEvaluation
+      // here ensures KV cache reuse is always available.
+      this.lastEvaluation = { contextWindow: [...this.chatHistory] };
+
       return {
         text: sanitized,
         rawText: fullResponse,

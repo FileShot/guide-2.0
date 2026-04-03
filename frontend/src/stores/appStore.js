@@ -174,7 +174,12 @@ const useAppStore = create((set, get) => ({
         set({ chatStreamingText: newText, streamingSegments: newSegs, _textTokenBuffer: null, _textTokenTimer: null });
       }
     }
-    set({ chatStreaming: val, ...(val ? {} : { chatStreamingText: '', chatThinkingText: '', chatGeneratingTool: null, streamingSegments: [], streamingToolCalls: [], _textTokenBuffer: null, _textTokenTimer: null }) });
+    // R56-Fix-A: Clear streaming state on BOTH true and false transitions.
+    // Previously only cleared on false. Late-arriving IPC token events after
+    // setChatStreaming(false) could write to chatStreamingText. When the next
+    // response started with setChatStreaming(true), those stale tokens were
+    // NOT cleared, causing previous response text to bleed into the new one.
+    set({ chatStreaming: val, chatStreamingText: '', chatThinkingText: '', chatGeneratingTool: null, streamingSegments: [], streamingToolCalls: [], _textTokenBuffer: null, _textTokenTimer: null });
   },
 
   appendStreamToken: (token) => {

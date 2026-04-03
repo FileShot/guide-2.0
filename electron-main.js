@@ -464,6 +464,7 @@ ipcMain.handle('api-fetch', async (_event, url, options) => {
       fs.mkdirSync(path.dirname(fullPath), { recursive: true });
       if (fs.existsSync(fullPath)) return { _status: 409, error: 'File already exists' };
       fs.writeFileSync(fullPath, content || '', 'utf8');
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('files-changed');
       return { success: true, path: fullPath };
     }
     if (p === '/api/files/delete' && method === 'POST') {
@@ -477,6 +478,7 @@ ipcMain.handle('api-fetch', async (_event, url, options) => {
       } else {
         fs.unlinkSync(fullPath);
       }
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('files-changed');
       return { success: true };
     }
     if (p === '/api/files/rename' && method === 'POST') {
@@ -486,6 +488,7 @@ ipcMain.handle('api-fetch', async (_event, url, options) => {
       const fullNew = path.isAbsolute(newPath) ? newPath : path.join(currentProjectPath || '', newPath);
       if (!fs.existsSync(fullOld)) return { _status: 404, error: 'Source not found' };
       fs.renameSync(fullOld, fullNew);
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('files-changed');
       return { success: true, path: fullNew };
     }
     if (p === '/api/files/search' && method === 'GET') {
