@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-04-05 — R54: Remove JinjaTemplateChatWrapper Override (Root Cause of write_todos Loop)
+
+### Issue 1 — Chat wrapper swap caused write_todos infinite loop (llmEngine.js)
+- **File:** `llmEngine.js` — 6 call sites (lines ~471, ~1030, ~1068, ~1348, ~1361, ~1657) + `_buildThinkingChatWrapper()` method (lines ~567-608)
+- **What was removed:** The entire `_buildThinkingChatWrapper()` method and all 6 call sites that created `thinkWrapperN` variables and passed them to `new LlamaChat({ chatWrapper: thinkWrapper })`.
+- **What was restored:** All 6 LlamaChat constructors now use `new LlamaChat({ contextSequence: this.sequence })` — the `chatWrapper` parameter defaults to `"auto"`, which calls `resolveChatWrapper(model)` and returns the model-family-specific wrapper (QwenChatWrapper for Qwen, Llama3_1ChatWrapper for Llama, etc.).
+- **Root cause:** R52/R53 introduced `_buildThinkingChatWrapper()` which created a generic `JinjaTemplateChatWrapper` with `enable_thinking=true` and explicit `segments.thoughtTemplate`. This REPLACED the auto-resolved `QwenChatWrapper` (confirmed in logs: `[Chat wrapper: JinjaTemplateChatWrapper]` instead of `[Chat wrapper: QwenChatWrapper]`). The QwenChatWrapper is a specialized wrapper with Qwen-specific message formatting, native `<tool_call>`/`<tool_response>` handling, and thought segment support already built in. The generic replacement used a different code path for conversation rendering (`fromChatHistoryToIntermediateOpenAiMessages → Jinja template` vs `generateContextState with LlamaText/SpecialTokensText`), producing subtly different token sequences that caused the model to loop on write_todos instead of transitioning to write_file.
+- **Additional finding:** The thinking wrapper produced 0 thinking tokens in every generation (confirmed by log: `thinkingChars=0`, `segmentType=none`). It was not achieving its goal AND breaking normal behavior.
+- **Why auto-resolve is correct:** node-llama-cpp's `resolveChatWrapper()` checks model metadata and Jinja template compatibility against specialized wrappers (QwenChatWrapper, Llama3_1ChatWrapper, MistralChatWrapper, DeepSeekChatWrapper, etc.). Each specialized wrapper already includes `segments.thought` configuration. Switching model families "just works" — no hardcoding needed.
+
+---
+
 ## 2026-04-05 — R53: Stuck Loop Termination, Web Search Fix, Thinking Segments
 
 ### Issue 1a — write_todos infinite loop (agenticLoop.js)
