@@ -258,11 +258,12 @@ async function handleLocalChat(ctx, message, context, helpers) {
   let d6CumulativeMetrics = null;    // Fix D: Track cumulative D6 productivity { iterations, totalNewLines, lastContent }
   const recentToolSigs = [];         // Track tool call signatures for stuck/cycle detection
   const toolExecCache = new Map();   // Cross-iteration dedup: signature → { iteration, resultSummary }
-  const DEDUP_EXEMPT_TOOLS = new Set(['write_file', 'append_to_file', 'edit_file', 'write_todos', 'update_todo', 'run_command', 'browser_click', 'browser_type']);
+  const DEDUP_EXEMPT_TOOLS = new Set(['write_file', 'append_to_file', 'edit_file', 'run_command', 'browser_click', 'browser_type']);
   let postShiftStutterRetries = 0;   // T23-Fix: retry count for post-context-shift stutter detection
   let salvageUsed = false;           // T32-Fix: true when salvage path extracted content from failed JSON parse
   let d6RetryCount = 0;              // R27-A: D6 give-up retry counter (was this._d6RetryCount — crashed because this is undefined)
   let lastContextPercent = 100;      // R39-B2: Track context% to detect context shifts between iterations
+  let consecutiveStuckCount = 0;     // R53-Fix: Track consecutive stuck detections for hard termination
 
   console.log(`[AgenticLoop] Init complete — entering loop (history=${llmEngine.chatHistory.length} entries, maxIter=${MAX_AGENTIC_ITERATIONS})`);
 
@@ -1432,15 +1433,23 @@ async function handleLocalChat(ctx, message, context, helpers) {
           );
           if (isDuplicateWrite) {
             console.log(`[AgenticLoop] R32-Fix Phase B: Blocked duplicate ${toolCall.name} — identical to recent call`);
+            // R53-Fix: Duplicate write = completion signal. The model re-submitted
+            // the same content, meaning it has nothing new to add. Mark the file
+            // as COMPLETE to prevent R16-Fix-B from asking "is it complete?" again
+            // (which creates an infinite ping-pong loop for small models).
             const entry = {
               tool: toolCall.name,
               params: toolCall.arguments,
-              result: { content: `Blocked: you just called ${toolCall.name} with identical content. The file already contains this content. Do NOT repeat the same tool call. If the file is complete, provide a summary. If more content is needed, write ONLY the NEW content that comes AFTER what was already written.` },
+              result: { success: false, duplicateBlocked: true, content: `File "${toolCall.arguments?.filePath || 'unknown'}" is already complete and saved to disk. Do NOT write to this file again. Move on to the next file or task.` },
             };
             toolResultEntries.push(entry);
             rollingSummary.recordToolCall(toolCall.name, toolCall.arguments, iteration);
-            // Also push to recentToolSigs immediately so subsequent calls in the
-            // SAME iteration batch are also caught
+            // R53-Fix: Clear rotationCheckpoint for this file — it's done
+            if (rotationCheckpoint?.filePath === toolCall.arguments?.filePath) {
+              console.log(`[AgenticLoop] R53-Fix: File "${toolCall.arguments.filePath}" marked complete (duplicate write = completion signal)`);
+              rotationCheckpoint = null;
+            }
+            fileCompletionCheckPending = true;
             recentToolSigs.push({ tool: toolCall.name, paramsHash });
             continue;
           }
@@ -1468,21 +1477,19 @@ async function handleLocalChat(ctx, message, context, helpers) {
             // New content is significantly longer — model generated more. Allow write.
             console.log(`[AgenticLoop] Rotation protection: new content (${newContent.length}) > checkpoint (${checkpointContent.length}) — allowing write`);
           } else {
-            // No new content beyond checkpoint — skip the write, inform model
+            // No new content beyond checkpoint — skip the write, file is complete.
+            // R53-Fix: Mark success: false so R16-Fix-B doesn't fire, preventing
+            // the "is it complete?" ping-pong loop.
             const lineCount = (checkpointContent.match(/\n/g) || []).length + 1;
-            const tailContent = checkpointContent.split('\n').slice(-30).join('\n');
             const entry = {
               tool: toolCall.name,
               params: toolCall.arguments,
-              result: { content: `File "${toolCall.arguments.filePath}" already has ${lineCount} lines on disk. Your write was blocked because it contained less content than what's already saved.\n\nThe file currently ends with:\n${tailContent}\n\nIf this file is INCOMPLETE, use append_to_file to add the remaining content. Do NOT use write_file.` },
+              result: { success: false, duplicateBlocked: true, content: `File "${toolCall.arguments.filePath}" is already complete with ${lineCount} lines on disk. Do NOT write to this file again. Move on to the next file or task.` },
             };
             toolResultEntries.push(entry);
             rollingSummary.recordToolCall(toolCall.name, toolCall.arguments, iteration);
-            // R32-Fix Phase A: Do NOT null rotationCheckpoint here.
-            // Blocking a write does not change what's on disk. The checkpoint
-            // must remain intact so subsequent append_to_file calls can accumulate
-            // content correctly and T42 summaries show accurate line counts.
-            console.log(`[AgenticLoop] Rotation protection: skipping write_file — checkpoint has ${checkpointContent.length} chars, new has ${newContent.length}`);
+            fileCompletionCheckPending = true;
+            console.log(`[AgenticLoop] Rotation protection: file complete — checkpoint has ${checkpointContent.length} chars, new has ${newContent.length}`);
             continue;
           }
           // R32-Fix Phase A: Do NOT null rotationCheckpoint after the if/else block.
@@ -1774,6 +1781,23 @@ async function handleLocalChat(ctx, message, context, helpers) {
       // ── Budget-aware tool result assembly ────────────────
       // Use formatToolResults with context-size awareness
       const formattedResults = formatToolResults(toolResultEntries, { totalCtx });
+
+      // ── R53-Fix: Hard termination on consecutive stuck detections ──
+      // Track consecutive stuck detections. First detection warns the model.
+      // Second detection (6+ identical tool calls total) terminates the loop.
+      // This is a production safety net — any model can loop regardless of
+      // how well the continuation messages are designed.
+      if (stuckDetected) {
+        consecutiveStuckCount++;
+        if (consecutiveStuckCount >= 2) {
+          const lastTool = recentToolSigs.length > 0 ? recentToolSigs[recentToolSigs.length - 1].tool : 'unknown';
+          console.log(`[AgenticLoop] R53-Fix: Hard termination — ${consecutiveStuckCount} consecutive stuck detections on "${lastTool}"`);
+          stream._send('llm-token', '\n\n*[Loop terminated: repeated identical tool calls detected]*\n');
+          break;
+        }
+      } else {
+        consecutiveStuckCount = 0;
+      }
 
       // If stuck/cycle detected, append redirect instruction
       const stuckSuffix = stuckDetected

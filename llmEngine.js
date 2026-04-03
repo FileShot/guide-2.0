@@ -578,8 +578,24 @@ class LLMEngine extends EventEmitter {
         template,
         tokenizer: this.model.tokenizer,
         additionalRenderParameters: { enable_thinking: true },
+        // R53-Fix: Explicitly configure thought segment delimiters instead of
+        // relying solely on auto-detection. Auto-detection via
+        // extractSegmentSettingsFromTokenizerAndChatTemplate checks if the
+        // template text contains <think>/<think> strings, but may fail for
+        // some template formats. Explicit configuration guarantees correct
+        // output parsing. Models that don't produce <think> tags simply get
+        // zero thinking tokens (harmless).
+        segments: {
+          thoughtTemplate: '<think>{{content}}</think>',
+        },
       });
-      console.log(`[LLM] Built thinking chat wrapper (enable_thinking=true, budget=${this.thoughtTokenBudget})`);
+      // R53-Fix: Log segment detection status for diagnostics
+      const thoughtSegment = wrapper.settings?.segments?.thought;
+      if (thoughtSegment) {
+        console.log(`[LLM] Built thinking chat wrapper (enable_thinking=true, budget=${this.thoughtTokenBudget}, thought segments detected)`);
+      } else {
+        console.log(`[LLM] Built thinking chat wrapper (enable_thinking=true, budget=${this.thoughtTokenBudget}, WARNING: thought segments NOT detected)`);
+      }
       return wrapper;
     } catch (err) {
       const log = require('./logger');

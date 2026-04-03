@@ -4,6 +4,45 @@
 
 ---
 
+## 2026-04-05 — R53: Stuck Loop Termination, Web Search Fix, Thinking Segments
+
+### Issue 1a — write_todos infinite loop (agenticLoop.js)
+- **File:** `pipeline/agenticLoop.js` — line ~261 (DEDUP_EXEMPT_TOOLS)
+- **What was removed:** `'write_todos'` and `'update_todo'` from the DEDUP_EXEMPT_TOOLS Set.
+- **Why:** write_todos with identical params was never dedup-blocked, letting the model call it 5+ times with the same todo list. Now identical write_todos/update_todo calls trigger R32-Fix Phase B cross-iteration dedup (returns cached result instead of re-executing).
+
+### Issue 1b — Duplicate write = file completion signal (agenticLoop.js)
+- **File:** `pipeline/agenticLoop.js` — R32-Fix Phase B block (~line 1433) and Rotation protection else-branch (~line 1488)
+- **What was changed:** When R32-Fix Phase B blocks a duplicate write_file (same file, same content), the result entry now has `success: false` and `duplicateBlocked: true`. The message says "File X is already complete. Move on." Additionally, `rotationCheckpoint` is cleared for the file and `fileCompletionCheckPending` is set to true.
+- **Same change in Rotation protection:** When rotation protection blocks a write_file because the new content is shorter or equal to what's already on disk, same treatment — `success: false`, file marked complete.
+- **Root cause this addresses:** R16-Fix-B fires after file writes with natural stop and asks "is the file complete?" — but the old blocked-write result had no `success: false`, so `allSucceeded` was true and R16-Fix-B fired even after blocked duplicates. This created an infinite ping-pong: system asks "complete?" → model rewrites → blocked → system asks "complete?" → model rewrites → blocked. Now `allSucceeded` is false when writes are blocked as duplicates, so R16-Fix-B never fires — breaking the feedback loop.
+- **Why "duplicate write = completion signal":** When a model re-submits the same file content, it has nothing new to add. The re-submission IS the model's confirmation that the file is done. Interpreting it as a stuck loop was architecturally wrong — it should be interpreted as task completion.
+
+### Issue 1c — Hard termination safety net (agenticLoop.js)
+- **File:** `pipeline/agenticLoop.js` — after stuck detection block (~line 1785), new state variable `consecutiveStuckCount` (~line 266)
+- **What was added:** `consecutiveStuckCount` increments each time `stuckDetected` fires. On first detection (count=1): existing behavior (append warning suffix to next message, reset sigs). On second detection (count>=2): `break` the for-loop, emit "[Loop terminated: repeated identical tool calls detected]" to UI, log termination. Resets to 0 when a non-stuck iteration occurs.
+- **Why this is not a band-aid:** Issues 1a and 1b address the specific root causes of the write_todos and write_file loops. This is a generic safety net for any loop pattern that 1a/1b don't cover — including tool combinations, model-specific behaviors, and edge cases. Every production agentic system (Copilot, Cursor, Devin) has hard loop termination. The threshold is 6 total identical calls (two stuck detections of 3 each).
+
+### Issue 2 — Web search returns zero results (webSearch.js)
+- **File:** `webSearch.js` — `search()` method, `_parseLiteResults()` method (new), `_fetchWithStatus()` method (new)
+- **Root cause:** DuckDuckGo's `html.duckduckgo.com/html/` endpoint now returns HTTP 202 with a JavaScript challenge page (`cc=botnet` in form URLs). The scraper cannot execute JavaScript, so it gets the challenge page instead of search results. All three search queries in the v2.3.11 test returned zero results because of this.
+- **What was changed:**
+  - `search()` now uses `https://lite.duckduckgo.com/lite/?q=` endpoint (confirmed working with live test — returns 200 with actual results)
+  - New `_parseLiteResults()` method parses the lite HTML format: splits on `class='result-link'`, extracts URL from preceding `href`, title from anchor text, snippet from `class="result-snippet"`
+  - New `_fetchWithStatus()` method returns `{status, body}` so status 202 (bot detection) can be caught
+  - Bot detection check: if status 202 or HTML contains `cc=botnet`/`anomaly.js`, returns clear error message
+  - User-Agent updated from Chrome 120 to Chrome 131
+- **Verification:** Tested 4 queries (bitcoin price, weather new york, ethereum price, what is recursion) — all returned 5 results with correct titles, URLs, and snippets.
+
+### Issue 3 — Zero thinking tokens despite enable_thinking=true (llmEngine.js)
+- **File:** `llmEngine.js` — `_buildThinkingChatWrapper()` method (~line 579)
+- **What was added:** Explicit `segments: { thoughtTemplate: '<think>{{content}}</think>' }` in the JinjaTemplateChatWrapper constructor options. Diagnostic logging of `wrapper.settings.segments.thought` after construction.
+- **Root cause:** node-llama-cpp's `JinjaTemplateChatWrapper` auto-detects `<think>` tags from the template text and tokenizer via `extractSegmentSettingsFromTokenizerAndChatTemplate()`. But silent failure is possible if the template format doesn't match the detection heuristics (e.g., the template escapes the tags differently or uses unusual newline patterns). Without explicit `segments` configuration, the thought segment prefix/suffix was never set, and `segmentType` was always `'none'`.
+- **What `segments.thoughtTemplate` does:** It tells node-llama-cpp's output parser "when the model produces text starting with `<think>`, categorize those tokens as `segmentType: 'thought'` until `</think>` is seen." This only affects OUTPUT parsing — it does NOT change the prompt. Models that don't produce `<think>` text get zero thinking tokens (same as before, harmless).
+- **What `additionalRenderParameters: { enable_thinking: true }` does (unchanged):** Controls PROMPT rendering — tells the Jinja template to include `<think>` as the expected response prefix for models that support thinking (Qwen3/3.5, DeepSeek). Templates that don't reference `enable_thinking` ignore it.
+
+---
+
 ## 2026-04-04 — R52: 6-Issue Deep Fix Session
 
 ### Issue 1 — web_search infinite loop (agenticLoop.js)
